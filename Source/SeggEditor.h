@@ -11,6 +11,11 @@ public:
 
     explicit SeggView (SeggProcessor& p) : proc (p), list (p), view (p), routing (p), mapPage (p)
     {
+        backdrop.draw = [this] (juce::Graphics& g) { paintBackdrop (g); };
+        backdrop.setInterceptsMouseClicks (false, false);
+        backdrop.setOpaque (true);
+        backdrop.setBufferedToImage (true);
+        addAndMakeVisible (backdrop);
         setLookAndFeel (&lnf);
         using K = segg::Control::Kind;
 
@@ -139,7 +144,7 @@ public:
     void setLaneForSnapshot (int l) { view.setLane (l); }
     void tickForSnapshot() { for (int i = 0; i < 40; ++i) { list.tick(); view.tick(); } updateVisibility(); }
 
-    void paint (juce::Graphics& g) override
+    void paintBackdrop (juce::Graphics& g)
     {
         using namespace segg;
         const float W = (float) getWidth(), H = (float) getHeight();
@@ -269,6 +274,7 @@ public:
 
     void resized() override
     {
+        backdrop.setBounds (getLocalBounds());
         auto at = [this] (const char* id, int x, int y, int w, int h) { if (auto* c = globalById[id]) c->setBounds (x, y, w, h); };
         prevBtn.setBounds (368, 20, 36, 30);
         presetBox.setBounds (436, 23, 180, 22);
@@ -413,7 +419,7 @@ private:
             tabs[t]->setToggleState (t == type, juce::dontSendNotification);
         }
         const bool free = proc.state.getRawParameterValue ("gsync")->load() > 0.5f;
-        if (free != freeShown) { freeShown = free; repaint (0, 0, getWidth(), kHeaderH); }
+        if (free != freeShown) { freeShown = free; backdrop.repaint (0, 0, getWidth(), kHeaderH); }
         if (auto* c = globalById["gbpm"]) c->setVisible (free);
         if (auto* c = globalById["grun"]) c->setVisible (free);
     }
@@ -430,8 +436,11 @@ private:
             updateVisibility();
             if (routing.isVisible()) routing.repaint();
             if (mapPage.isVisible()) mapPage.sync();
-            repaint (1040, kDeckY + 140, 240, 50);
-            if (const auto bpm = proc.uiBpm.load(); bpm != bpmShown) { bpmShown = bpm; repaint ((int) kConsoleX, 8, 1280 - (int) kConsoleX, 54); }
+            const int port = proc.ti (track, segg::pPort);
+            const int statusNow = port * 64 + (port > 0 && proc.direct.isSlotLive (port - 1) ? 1 : 0) + (port > 0 && proc.direct.isSlotFailed (port - 1) ? 2 : 0)
+                                + (proc.learnRow.load() >= 0 ? 4 : 0) + (proc.uiPlaying.load() ? 8 : 0);
+            if (statusNow != statusShown) { statusShown = statusNow; backdrop.repaint (1040, kDeckY + 140, 240, 50); }
+            if (const auto bpm = proc.uiBpm.load(); bpm != bpmShown) { bpmShown = bpm; backdrop.repaint ((int) kConsoleX, 8, 1280 - (int) kConsoleX, 54); }
             if (presetBox.getSelectedItemIndex() != proc.presets.getCurrent()) refreshPresets();
         }
     }
@@ -442,6 +451,14 @@ private:
         presetBox.addItemList (proc.presets.getNames(), 1);
         presetBox.setSelectedItemIndex (proc.presets.getCurrent(), juce::dontSendNotification);
     }
+
+    /** A child that draws through its owner: the static artwork, cached so animated controls never redraw it. */
+    struct Layer : juce::Component
+    {
+        std::function<void (juce::Graphics&)> draw;
+        void paint (juce::Graphics& g) override { draw (g); }
+    };
+    Layer backdrop;
 
     SeggProcessor& proc;
     segg::LookAndFeel lnf;
@@ -456,7 +473,7 @@ private:
     std::unique_ptr<segg::Control> routeOffset, routeReset, routeKey;
     juce::TextButton prevBtn, nextBtn, saveBtn, delBtn, routingBtn, mapBtn, panicBtn;
     juce::ComboBox presetBox;
-    int track = 0, slowTick = 0, lastType = -1;
+    int track = 0, slowTick = 0, lastType = -1, statusShown = -1;
     bool freeShown = false;
     float bpmShown = 0.0f;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeggView)

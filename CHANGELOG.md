@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.5] - 2026-11-03
+- Interfaccia molto più fluida: lo sfondo e i controlli fermi vengono conservati in immagine invece di essere ridisegnati a ogni fotogramma. Nelle misure il tempo di disegno scende da 100-180 ms a meno di 10 ms per fotogramma.
+- Lo stato della porta si ridisegna solo quando cambia.
+
 ## [0.1.4] - 2026-11-03
 - macOS: nuovo installer `.pkg` con VST3 e AU. Basta approvare il pacchetto una volta, e i plugin installati non restano bloccati da Gatekeeper.
 - macOS: corretta la versione minima del sistema. Le build CI richiedevano macOS 14.5 invece di macOS 11.
