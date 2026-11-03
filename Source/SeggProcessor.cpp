@@ -307,6 +307,7 @@ void SeggProcessor::getStateInformation (juce::MemoryBlock& dest)
     {
         xml->addChildElement (portsToTree().createXml().release());
         xml->setAttribute ("presetIndex", presets.getCurrent());
+        xml->setAttribute ("uiScale", (double) uiScale.load());
         copyXmlToBinary (*xml, dest);
     }
 }
@@ -319,6 +320,7 @@ void SeggProcessor::setStateInformation (const void* data, int size)
         {
             if (auto* ports = xml->getChildByName ("PORTS")) portsFromTree (juce::ValueTree::fromXml (*ports));
             presets.markCurrent (xml->getIntAttribute ("presetIndex", 0));
+            uiScale = (float) juce::jlimit (0.6, 2.0, xml->getDoubleAttribute ("uiScale", 1.0));
         }
     }
 }

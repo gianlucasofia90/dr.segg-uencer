@@ -70,6 +70,7 @@ public:
 
     std::atomic<bool> uiPlaying { false };
     std::atomic<float> uiBpm { 120.0f };
+    std::atomic<float> uiScale { 1.0f };   // editor size, saved with the session
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 

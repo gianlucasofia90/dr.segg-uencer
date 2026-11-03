@@ -3,10 +3,13 @@
 #include "SeggUI.h"
 #include "Params.h"
 
-class SeggEditor : public juce::AudioProcessorEditor, private juce::Timer
+/** The whole interface, laid out on a fixed 1280 x 800 grid. SeggEditor scales it to the window. */
+class SeggView : public juce::Component, private juce::Timer
 {
 public:
-    explicit SeggEditor (SeggProcessor& p) : AudioProcessorEditor (p), proc (p), list (p), view (p), routing (p)
+    static constexpr int kW = 1280, kH = 800;
+
+    explicit SeggView (SeggProcessor& p) : proc (p), list (p), view (p), routing (p)
     {
         setLookAndFeel (&lnf);
         using K = segg::Control::Kind;
@@ -67,13 +70,14 @@ public:
         routeReset = std::make_unique<segg::Control> (p.state, "greset", "RESET ON PLAY", K::Toggle);
         routeKey = std::make_unique<segg::Control> (p.state, "gkeyin", "MIDI TRANSPOSE", K::Toggle);
         for (auto* ctl : { routeOffset.get(), routeReset.get(), routeKey.get() }) addChildComponent (ctl);
+        for (auto* ctl : { routeReset.get(), routeKey.get() }) ctl->button.getProperties().set ("sgDeck", true);
 
         sendLookAndFeelChange();
-        setSize (1280, 800);
+        setSize (kW, kH);
         selectTrack (0);
         startTimerHz (30);
     }
-    ~SeggEditor() override { setLookAndFeel (nullptr); }
+    ~SeggView() override { setLookAndFeel (nullptr); }
 
     void selectTrack (int t)
     {
@@ -127,37 +131,49 @@ public:
         g.setColour (c::onPlate); g.drawText (name, 16, 9, 340, 40, juce::Justification::centredLeft);
         taggedPlate (g, { 410, 17, 236, 34 }, c::tag);
 
-        auto lcd = juce::Rectangle<float> (1068, 13, 124, 44);
+        // transport console: one black box, every label inside it, flush with the right margin
+        const bool freeRun = proc.state.getRawParameterValue ("gsync")->load() > 0.5f;   // RUN plate sits right of the box
+        auto console = juce::Rectangle<float> (kConsoleX, 12.0f, (freeRun ? kRunX - 12.0f : W - kMargin) - kConsoleX, 46.0f);
         g.setColour (c::plate);
-        g.fillRoundedRectangle (lcd, 4.0f);
+        g.fillRoundedRectangle (console, 4.0f);
         g.setColour (c::onPlate.withAlpha (0.12f));
-        g.drawRoundedRectangle (lcd.reduced (0.5f), 4.0f, 1.0f);
-        g.setColour (c::onPlate.withAlpha (0.8f));
-        g.setFont (medium (10.0f, 0.06f));
-        g.drawText ("TEMPO", 1080, 17, 60, 12, juce::Justification::left);
+        g.drawRoundedRectangle (console.reduced (0.5f), 4.0f, 1.0f);
+        g.fillRect (kConsoleX + 96.0f, 20.0f, 1.0f, 30.0f);
         if (proc.state.getRawParameterValue ("gsync")->load() < 0.5f)
         {   // in DAW sync, the tempo coming from the host
+            g.setColour (c::onPlate.withAlpha (0.8f));
+            g.setFont (bold (11.0f, 0.06f));
+            g.drawText ("TEMPO", (int) kConsoleX + 110, 16, 80, 14, juce::Justification::left);
             g.setFont (pixel (10.0f));
-            g.drawText ("BPM", 1080, 41, 40, 12, juce::Justification::left);
+            g.drawText ("BPM  DAW", (int) kConsoleX + 110, 38, 80, 12, juce::Justification::left);
             g.setColour (c::accent);
             g.setFont (pixel (20.0f));
-            g.drawText (juce::String (proc.uiBpm.load(), 1), 1112, 25, 74, 24, juce::Justification::right);
+            g.drawText (juce::String (proc.uiBpm.load(), 1), (int) (W - kMargin) - 100, 23, 88, 24, juce::Justification::right);
         }
 
         // tracks
-        glassPanel (g, { 16, 88, 380, 696 }, "16 tracks", "Sequencers");
+        // every block sits kMargin from the window edge and kMargin from its neighbours
+        glassPanel (g, { 16, 88, 376, 696 }, "16 tracks", "Sequencers");
         g.setColour (c::ink.withAlpha (0.14f));
-        g.fillRect (32, 688, 348, 1);
+        g.fillRect (32, 688, 344, 1);
         g.setColour (c::inkSoft);
         g.setFont (medium (10.0f, 0.3f));
         g.drawText ("GLOBAL", 34, 694, 120, 12, juce::Justification::left);
 
         // deck with the track's common settings
-        g.setColour (c::modGround);
-        g.fillRect (408, kDeckY, getWidth() - 408, getHeight() - kDeckY);
-        hazard (g, { 408.0f, (float) kDeckY, W - 408.0f, 8.0f });
+        {
+            const auto deck = juce::Rectangle<float> (408.0f, (float) kDeckY, W - 408.0f - kMargin, H - kDeckY - kMargin);
+            juce::Path body;
+            body.addRoundedRectangle (deck, 10.0f);
+            juce::DropShadow (c::panelShadow, 28, { 0, 12 }).drawForPath (g, body);
+            g.setColour (c::modGround);
+            g.fillPath (body);
+            juce::Graphics::ScopedSaveState save (g);
+            g.reduceClipRegion (body);
+            hazard (g, deck.withHeight (8.0f));
+        }
         g.setColour (c::onPlate.withAlpha (0.18f));
-        g.fillRect (1030, kDeckY + 12, 1, getHeight() - kDeckY - 24);
+        g.fillRect (1030, kDeckY + 22, 1, getHeight() - kDeckY - kMargin - 38);
 
         if (routingBtn.getToggleState())
         {
@@ -185,11 +201,11 @@ public:
         if (port == 0) status = "HOST OUTPUT";
         else if (! proc.direct.isSlotLive (port - 1)) { status = "PORT " + juce::String (port) + " NOT ASSIGNED"; g.setColour (segg::c::accent); }
         else status = "PORT " + juce::String (port) + " READY";
-        g.drawText (status, 1046, kDeckY + 148, 216, 14, juce::Justification::left);
+        g.drawText (status, 1044, kDeckY + 146, 204, 14, juce::Justification::left);
         if (! proc.uiPlaying.load())
         {
             g.setColour (segg::c::onPlate.withAlpha (0.7f));
-            g.drawText (proc.state.getRawParameterValue ("gsync")->load() > 0.5f ? "PRESS RUN TO START" : "START THE HOST TRANSPORT", 1046, kDeckY + 168, 216, 14, juce::Justification::left);
+            g.drawText (proc.state.getRawParameterValue ("gsync")->load() > 0.5f ? "PRESS RUN TO START" : "START THE HOST TRANSPORT", 1044, kDeckY + 164, 204, 14, juce::Justification::left);
         }
     }
 
@@ -202,30 +218,31 @@ public:
         saveBtn.setBounds (696, 20, 62, 30);
         delBtn.setBounds (760, 20, 54, 30);
         routingBtn.setBounds (816, 20, 112, 30);
-        at ("gsync", 992, 12, 66, 38);
-        at ("gbpm", 1130, 15, 56, 38);
-        at ("grun", 1198, 20, 66, 30);
-        at ("groot", 32, 710, 76, 40);
-        at ("gscale", 116, 710, 100, 40);
-        at ("gdensity", 224, 710, 74, 38);
-        at ("gchaos", 306, 710, 74, 38);
+        at ("gsync", (int) kConsoleX + 10, 15, 78, 40);
+        at ("gbpm", (int) kConsoleX + 108, 15, 62, 40);
+        at ("grun", (int) kRunX, 20, 87, 32);
+        at ("groot", 32, 712, 76, 40);
+        at ("gscale", 116, 712, 100, 40);
+        at ("gdensity", 224, 712, 72, 38);
+        at ("gchaos", 304, 712, 72, 38);
 
-        list.setBounds (32, 140, 352, 16 * segg::TrackList::kRowH);
-        panicBtn.setBounds (296, 100, 86, 30);
-        view.setBounds (424, 146, 440, 416);
-        routing.setBounds (424, 98, 824, 470);
+        list.setBounds (32, 140, 344, 16 * segg::TrackList::kRowH);
+        panicBtn.setBounds (290, 100, 89, 30);
+        view.setBounds (424, 144, 440, 416);
+        routing.setBounds (424, 98, 824, 462);
         for (int t = 0; t < segg::kNumTypes; ++t) tabs[t]->setBounds (604 + t * 128, 96, 126, 42);
 
-        routeOffset->setBounds (1046, 612, 214, 38);
-        routeReset->setBounds (1046, 662, 214, 32);
-        routeKey->setBounds (1046, 702, 214, 32);
+        routeOffset->setBounds (1044, kDeckY + 22, 204, 38);
+        routeReset->setBounds (1044, kDeckY + 72, 207, 32);
+        routeKey->setBounds (1044, kDeckY + 112, 207, 32);
         layoutTrackControls();
     }
 
     segg::Control* getTrackControl (segg::P p) { for (auto& e : trackControls) if (e.param == p) return e.control; return nullptr; }
 
 private:
-    static constexpr int kDeckY = 592, kHeaderH = 72;
+    static constexpr int kDeckY = 592, kHeaderH = 72, kMargin = 16;
+    static constexpr float kConsoleX = 1000.0f, kRunX = 1180.0f;
 
     struct Entry { segg::P param; segg::Control* control; int group; };   // group: 0 = common, 1 + type = that sequencer
 
@@ -275,14 +292,14 @@ private:
     {
         using namespace segg;
         auto place = [this] (P p, int x, int y, int w, int h) { if (auto* c = getTrackControl (p)) c->setBounds (x, y, w, h); };
-        const int row1 = kDeckY + 18, row2 = kDeckY + 132;
+        const int row1 = kDeckY + 20, row2 = kDeckY + 130, row3 = kDeckY + 22;
         const P knobs[8] = { pSwing, pDrift, pGate, pVel, pVrand, pProb, pRoll, pMutate };
-        for (int i = 0; i < 8; ++i) place (knobs[i], 418 + i * 76, row1, 76, 100);
-        place (pRate, 420, row2, 92, 40);    place (pNote, 520, row2, 70, 38);   place (pScale, 598, row2, 108, 40);
-        place (pChord, 714, row2, 84, 40);   place (pRolln, 806, row2, 62, 38);  place (pDelay, 876, row2, 70, 38);
-        place (pSeed, 954, row2, 64, 38);
-        place (pPort, 1046, row1, 110, 40);  place (pCh, 1166, row1, 96, 38);
-        place (pLsrc, 1046, row1 + 56, 110, 40); place (pLmode, 1166, row1 + 56, 96, 40);
+        for (int i = 0; i < 8; ++i) place (knobs[i], 424 + i * 74, row1, 74, 100);
+        place (pRate, 424, row2, 92, 40);    place (pNote, 524, row2, 70, 38);   place (pScale, 602, row2, 108, 40);
+        place (pChord, 718, row2, 84, 40);   place (pRolln, 810, row2, 62, 38);  place (pDelay, 880, row2, 66, 38);
+        place (pSeed, 954, row2, 62, 38);
+        place (pPort, 1044, row3, 100, 40);  place (pCh, 1152, row3, 96, 38);
+        place (pLsrc, 1044, row3 + 56, 100, 40); place (pLmode, 1152, row3 + 56, 96, 40);
 
         // sequencer controls beside the well: knobs on a 4-column grid, then menus and switches two by two
         auto isKnob = [this] (P p) {
@@ -348,7 +365,7 @@ private:
             updateVisibility();
             if (routing.isVisible()) routing.repaint();
             repaint (1040, kDeckY + 140, 240, 50);
-            if (const auto bpm = proc.uiBpm.load(); bpm != bpmShown) { bpmShown = bpm; repaint (1064, 8, 134, 54); }
+            if (const auto bpm = proc.uiBpm.load(); bpm != bpmShown) { bpmShown = bpm; repaint ((int) kConsoleX, 8, 1280 - (int) kConsoleX, 54); }
             if (presetBox.getSelectedItemIndex() != proc.presets.getCurrent()) refreshPresets();
         }
     }
@@ -375,5 +392,46 @@ private:
     int track = 0, slowTick = 0, lastType = -1;
     bool freeShown = false;
     float bpmShown = 0.0f;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeggView)
+};
+
+/** Resizable window with the proportions locked: the view is drawn as vectors at the window's own scale,
+    so it stays sharp at any size. The size is saved with the session. */
+class SeggEditor : public juce::AudioProcessorEditor
+{
+public:
+    static constexpr int kW = SeggView::kW, kH = SeggView::kH;
+    static constexpr double kMinScale = 0.6, kMaxScale = 2.0;
+
+    explicit SeggEditor (SeggProcessor& p) : AudioProcessorEditor (p), proc (p), ui (p)
+    {
+        addAndMakeVisible (ui);
+        ui.setBounds (0, 0, kW, kH);
+        setResizable (true, true);
+        setResizeLimits (juce::roundToInt (kW * kMinScale), juce::roundToInt (kH * kMinScale),
+                         juce::roundToInt (kW * kMaxScale), juce::roundToInt (kH * kMaxScale));
+        getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
+        const double s = juce::jlimit (kMinScale, kMaxScale, (double) p.uiScale.load());
+        setSize (juce::roundToInt (kW * s), juce::roundToInt (kH * s));
+    }
+
+    void resized() override
+    {
+        const float s = (float) getWidth() / (float) kW;
+        ui.setTransform (juce::AffineTransform::scale (s));
+        proc.uiScale = s;
+    }
+
+    void paint (juce::Graphics& g) override { g.fillAll (segg::c::ground); }
+
+    // used by the headless tests
+    void selectTrack (int t)          { ui.selectTrack (t); }
+    void showRouting (bool on)        { ui.showRouting (on); }
+    void setLaneForSnapshot (int l)   { ui.setLaneForSnapshot (l); }
+    void tickForSnapshot()            { ui.tickForSnapshot(); }
+
+private:
+    SeggProcessor& proc;
+    SeggView ui;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeggEditor)
 };

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.2] - 2026-11-03
+- Finestra ridimensionabile (dal 60 al 200 %) con le proporzioni bloccate; la dimensione si salva con il progetto.
+- Grafica più nitida: a ogni dimensione l'interfaccia viene ridisegnata in vettoriale, e il font pixel cade sulla sua griglia.
+- Margini uguali ovunque: 16 px dai bordi e tra i pannelli; il deck in basso è un pannello come gli altri.
+- SYNC e TEMPO in un'unica console nell'header; RUN accanto, in modalità FREE.
+- Testo dei menu a tendina (SYNC, OUTPUT ...) sempre dentro il riquadro.
+- Interruttori spenti più visibili sul deck scuro.
+- Test: `--snap` accetta la scala della finestra come ultimo argomento.
+
 ## [0.1.1] - 2026-11-03
 Nuova interfaccia **Egg Lab**, sorella di quella di SONIC GRAIN: stessi caratteri, piastre, manopole e spaziature, cambia solo lo sfondo.
 - Fondo rosso con fascia diagonale, scacchiera e anelli giallo e cromato; header e deck con bordo a strisce di pericolo; deck antracite.

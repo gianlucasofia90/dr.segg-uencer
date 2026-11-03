@@ -1,6 +1,7 @@
 // DR. SEGG-UENCER headless tests: drive the processor with a fake host transport and check the MIDI it plays.
 // Run:  DrSeggUencerTests                        -> unit tests (exit code 1 on failure)
-//       DrSeggUencerTests --snap file track [page] -> render the editor to a PNG, track 1-16, page 0 = tracks, 1 = routing
+//       DrSeggUencerTests --snap file track [page] [preset] [scale] -> render the editor to a PNG, track 1-16,
+//                                     page 0 = tracks, 1 = routing, 10+ = step lane; scale = window size (1 = 1280 x 800)
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SeggProcessor.h"
 #include "SeggEditor.h"
@@ -695,14 +696,15 @@ static void testSpeed()
     CHECK (r.p.engine.numPending() < Engine::kPoolSize, "event pool never fills up");
 }
 
-static void runSnap (const juce::String& path, int track, int page, int preset);
+static void runSnap (const juce::String& path, int track, int page, int preset, float scale);
 
 int main (int argc, char** argv)
 {
     if (argc > 1 && juce::String (argv[1]) == "--snap")
     {
         runSnap (argc > 2 ? juce::String (argv[2]) : juce::String ("snap_segg.png"), argc > 3 ? juce::String (argv[3]).getIntValue() : 1,
-                 argc > 4 ? juce::String (argv[4]).getIntValue() : 0, argc > 5 ? juce::String (argv[5]).getIntValue() : 2);
+                 argc > 4 ? juce::String (argv[4]).getIntValue() : 0, argc > 5 ? juce::String (argv[5]).getIntValue() : 2,
+                 argc > 6 ? juce::String (argv[6]).getFloatValue() : 1.0f);
         return 0;
     }
     juce::ScopedJuceInitialiser_GUI init;
@@ -726,7 +728,7 @@ int main (int argc, char** argv)
     return failures == 0 ? 0 : 1;
 }
 
-static void runSnap (const juce::String& path, int track, int page, int preset)
+static void runSnap (const juce::String& path, int track, int page, int preset, float scale)
 {
     juce::ScopedJuceInitialiser_GUI init;
     {
@@ -741,7 +743,7 @@ static void runSnap (const juce::String& path, int track, int page, int preset)
             if (page >= 10) oe->setLaneForSnapshot (page - 10);
             oe->tickForSnapshot();
         }
-        ed->setBounds (0, 0, 1280, 800);
+        ed->setSize (juce::roundToInt (1280 * scale), juce::roundToInt (800 * scale));
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         juce::File f (juce::File::getCurrentWorkingDirectory().getChildFile (path));
         f.deleteFile();

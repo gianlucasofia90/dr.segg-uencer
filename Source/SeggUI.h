@@ -61,7 +61,9 @@ inline juce::Font face (const juce::Typeface::Ptr& t, float size, float tracking
 inline juce::Font medium (float size, float tracking = 0.0f) { return face (Fonts::get().medium, size, tracking); }
 inline juce::Font bold (float size, float tracking = 0.0f)   { return face (Fonts::get().bold, size, tracking); }
 inline juce::Font black (float size, float tracking = 0.0f)  { return face (Fonts::get().black, size, tracking); }
-inline juce::Font pixel (float size)                         { return face (Fonts::get().pixel, size); }
+// Silkscreen draws on a grid of 1/8 em and JUCE sizes a font by ascent + descent (1.28 em): x 1.024 puts every
+// font pixel on exactly one (10) or two (20) screen pixels, so the readouts stay sharp instead of smeared.
+inline juce::Font pixel (float size)                         { return face (Fonts::get().pixel, size * 1.024f); }
 
 /** A rectangle skewed by -30 degrees: the plate every button, tab and tag is drawn on. */
 inline juce::Path platePath (juce::Rectangle<float> r)
@@ -267,7 +269,8 @@ public:
         auto p = platePath (r);
         g.setColour (juce::Colour (0x59000000));
         g.fillPath (p, juce::AffineTransform::translation (3, 3));
-        juce::Colour fill = c::plate;
+        // on the black deck an off plate would vanish: lift it a step
+        juce::Colour fill = b.getProperties()["sgDeck"] ? juce::Colour (0xff2c3038) : c::plate;
         if (on) fill = rec ? c::signal : c::accent;
         else if (down) fill = c::tag.darker (0.3f);
         else if (over) fill = c::tag;
@@ -297,6 +300,7 @@ public:
     {
         if (box.getWidth() < 62) { label.setBounds (1, 1, box.getWidth() - 2, box.getHeight() - 2); label.setJustificationType (juce::Justification::centred); }
         else { label.setBounds (4, 1, box.getWidth() - 22, box.getHeight() - 2); label.setJustificationType (juce::Justification::centredLeft); }
+        label.setBorderSize ({ 0, 3, 0, 2 });
         label.setFont (getComboBoxFont (box));
         label.setColour (juce::Label::textColourId, isOnDark (box) ? c::onPlate : c::ink);
         label.setMinimumHorizontalScale (0.7f);

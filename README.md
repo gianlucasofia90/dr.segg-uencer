@@ -62,6 +62,8 @@ In alternativa alla porta virtuale funziona anche il bus IAC di macOS. Le note c
 
 ![Pagina ROUTING con 16 porte](docs/screenshot-routing.png)
 
+La finestra si ridimensiona trascinando l'angolo in basso a destra, con le proporzioni bloccate. Se su Windows l'interfaccia appare sfocata, in Live fai clic destro sulla barra del titolo del plugin e disattiva **Auto-Scale Plugin Window**: Live smette di ingrandire la finestra come un'immagine e il plugin si ridisegna alla risoluzione dello schermo.
+
 Con Sync su DAW il sequencer parte con il trasporto di Live. Con FREE usa il suo BPM e il tasto RUN.
 
 ## Preset
