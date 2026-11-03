@@ -4,10 +4,11 @@
 #include "DirectMidi.h"
 #include "Presets.h"
 
-class SeggProcessor : public juce::AudioProcessor
+class SeggProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     SeggProcessor();
+    ~SeggProcessor() override { stopTimer(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -60,12 +61,22 @@ public:
         }
     }
 
+    /** Input map: the next note, CC or pitch wheel that arrives fills this row. -1 = not listening. */
+    std::atomic<int> learnRow { -1 };
+    /** Learn for a parameter: reuses its row or takes a free one. Returns the row, or -1 if the table is full. */
+    int startLearn (const juce::String& paramId);
+    int findMapRow (const juce::String& paramId) const;
+    void clearMapRow (int row);
+    /** Applies what the input map collected. Parameters are set here, on the message thread, never on the audio thread. */
+    void pumpMidiMap();
+
     void panic() { panicRequested.store (true); }
     void setPortSlot (int slot, const juce::String& deviceId);
 
     juce::AudioProcessorValueTreeState state;
     segg::PresetManager presets;
     segg::Engine engine;
+    std::array<segg::InMapRow, segg::kNumMapRows> inMap;
     segg::DirectMidi direct;
 
     std::atomic<bool> uiPlaying { false };
@@ -82,6 +93,12 @@ private:
     void patternsFromTree (const juce::ValueTree&);
     juce::ValueTree portsToTree() const;
     void portsFromTree (const juce::ValueTree&);
+    juce::ValueTree inMapToTree() const;
+    void inMapFromTree (const juce::ValueTree&);
+    juce::ValueTree outMapToTree() const;
+    void outMapFromTree (const juce::ValueTree&);
+    void timerCallback() override { pumpMidiMap(); }
+    void handleLearn (int status, int d1, int d2) noexcept;
 
     std::array<std::array<std::atomic<float>*, segg::kNumP>, segg::kNumTracks> trackPtr {};
     std::atomic<float>* gSync {}, *gBpm {}, *gRun {}, *gRoot {}, *gScale {}, *gDensity {}, *gChaos {}, *gReset {}, *gKeyIn {}, *gOffset {};
@@ -90,5 +107,8 @@ private:
     bool internalRunning = false;
     int heldKey = -1;
     std::atomic<bool> panicRequested { false };
+    struct MapValue { int param; float norm; };
+    juce::AbstractFifo mapFifo { 1024 };
+    std::array<MapValue, 1024> mapValues {};
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeggProcessor)
 };

@@ -80,6 +80,8 @@ enum P
     pCmode, pCpath, pCxdiv, pCydiv, pCw, pChgt, pCacc, pCtrig,
     // physics
     pPcount, pPspeed, pPgrav, pPelast, pPmode, pPrange, pPsize, pPquant, pPkick,
+    // output
+    pNotes,
     kNumP
 };
 
@@ -91,7 +93,8 @@ static inline const char* kParamIds[kNumP] = {
     "slen", "sdir",
     "tlen", "tknob", "trange", "tdens",
     "cmode", "cpath", "cxdiv", "cydiv", "cw", "chgt", "cacc", "ctrig",
-    "pcount", "pspeed", "pgrav", "pelast", "pmode", "prange", "psize", "pquant", "pkick" };
+    "pcount", "pspeed", "pgrav", "pelast", "pmode", "prange", "psize", "pquant", "pkick",
+    "notes" };
 
 struct TrackParams
 {

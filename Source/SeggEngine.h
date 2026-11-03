@@ -5,6 +5,7 @@
 // Time is measured in beats (ppq), so the music follows host tempo changes and renders the same offline. Events are
 // handled in time order across all tracks; that is what makes links between tracks sample accurate.
 #include "SeggCore.h"
+#include "MidiMap.h"
 
 namespace segg
 {
@@ -32,6 +33,7 @@ public:
     std::array<TrackParams, kNumTracks> params {};
     std::array<Pattern, kNumTracks> patterns;
     std::array<UiTrack, kNumTracks> ui;
+    std::array<OutMapRow, kNumMapRows> outMap;
     GlobalParams global;
 
     void prepare (double sampleRate) noexcept
@@ -92,6 +94,7 @@ public:
         }
 
         flush (out);
+        updateOutMap (out, ppq1, t.numSamples);
         sampleClock += t.numSamples;
         publishUi();
     }
@@ -130,7 +133,9 @@ private:
         int rate = -1, type = -1, seed = -1;
         double stepBeats = 0.25, nextT = 0, physNext = 0, lastFire = -1.0e12, lastHit = -1.0e12;
         std::int64_t tick = 0, tickBase = 0, physCount = 0;
-        Rng rng;
+        Rng rng, modRng;        // modRng feeds the Random output, so mapping a track never changes its notes
+        float sigNote = 0.5f, sigVel = 0.0f, sigRand = 0.0f;
+        double gateUntil = -1.0e12;
         int transpose = 0, lastOffset = 0, melody = 0, mutRot = 0, mutPulses = 0, pos = 0, dir = 1, cartJitter = 0;
         float driftMs = 0;
         std::array<std::int8_t, kNumCells> stepMut {};
@@ -141,6 +146,8 @@ private:
     };
 
     struct Pending { std::int64_t when; std::uint32_t token; std::uint8_t port, status, d1, d2; };
+
+    struct MapState { float value = 0.0f; int sent = -1, dest = DestOff, port = 0, ch = 0; std::int64_t nextSend = 0; };
 
     struct Fire { int offset = 0; float vel = 1.0f, gate = 1.0f, prob = 1.0f; int ratch = 1; };
 
@@ -223,6 +230,8 @@ private:
         tr.seed = p.i (pSeed);
         tr.rng.seed ((std::uint32_t) (tr.seed + 1) * 7919u + (std::uint32_t) i * 104729u);
         tr.reg = tr.rng.next();
+        tr.modRng.seed ((std::uint32_t) (tr.seed + 1) * 31337u + (std::uint32_t) i);
+        tr.gateUntil = -1.0e12;
         tr.transpose = tr.lastOffset = tr.melody = tr.mutRot = tr.mutPulses = tr.pos = tr.cartJitter = 0;
         tr.dir = 1;
         tr.tickBase = 0;
@@ -576,6 +585,13 @@ private:
         const int port = std::clamp (p.i (pPort), 0, kNumSlots);
         const int ch = std::clamp (p.i (pCh), 1, 16) - 1;
 
+        tr.sigNote = std::clamp (0.5f + (float) (f.offset + tr.transpose + global.keyTranspose) / 48.0f, 0.0f, 1.0f);
+        tr.sigVel = (float) vel / 127.0f;
+        tr.sigRand = tr.modRng.unit();
+        tr.gateUntil = when + gateBeats;
+        mapOnHit (i, port, ch, sampleClock + std::llround (on));
+
+        if (p.b (pNotes))
         for (int r = 0; r < ratch; ++r)
             for (int note : notes)
             {
@@ -623,6 +639,109 @@ private:
         pool[(size_t) poolCount++] = { off, token, (std::uint8_t) port, (std::uint8_t) (0x80 | ch), (std::uint8_t) note, 0 };
     }
 
+    // ---------------- output map
+
+    float mapSignal (int i, int source, double ppq) const noexcept
+    {
+        const auto& tr = tracks[(size_t) i];
+        const auto& p = params[(size_t) i];
+        const auto& u = ui[(size_t) i];
+        const int type = p.i (pType);
+        const auto steps = [&] { return type == Euclid ? std::clamp (p.i (pEsteps), 1, kMaxEuclid) : std::clamp (p.i (pSlen), 1, kNumCells); };
+        switch (source)
+        {
+            case OutNote:     return tr.sigNote;
+            case OutVelocity: return tr.sigVel;
+            case OutRandom:   return tr.sigRand;
+            case OutGate:     return ppq < tr.gateUntil ? 1.0f : 0.0f;
+            case OutPosX:
+                if (type == Turing)    return (float) (tr.reg & 0xffu) / 255.0f;
+                if (type == Physics)   return tr.balls[0].x;
+                if (type == Cartesian) return (float) u.cx.load (std::memory_order_relaxed) / 3.0f;
+                return steps() > 1 ? (float) tr.pos / (float) (steps() - 1) : 0.0f;
+            default:      // OutPosY
+                if (type == Turing)    return (float) ((tr.reg >> 8) & 0xffu) / 255.0f;
+                if (type == Physics)   return tr.balls[0].y;
+                if (type == Cartesian) return (float) u.cy.load (std::memory_order_relaxed) / 3.0f;
+                // a smooth ramp over the whole pattern
+                return (float) (std::fmod (ppq / tr.stepBeats, (double) steps()) / (double) steps());
+        }
+    }
+
+    static int mapValue (const OutMapRow& row, int dest, float x) noexcept
+    {
+        const float lo = (float) row.lo.load (std::memory_order_relaxed) * 0.01f, hi = (float) row.hi.load (std::memory_order_relaxed) * 0.01f;
+        const float v = std::clamp (lo + (hi - lo) * x, 0.0f, 1.0f);
+        return (int) std::lround (v * (dest == DestPitch ? 16383.0f : 127.0f));
+    }
+
+    static void mapMessage (const OutMapRow& row, int dest, int ch, int value, std::uint8_t& status, std::uint8_t& d1, std::uint8_t& d2) noexcept
+    {
+        if (dest == DestPitch)
+        {
+            status = (std::uint8_t) (0xE0 | ch); d1 = (std::uint8_t) (value & 0x7f); d2 = (std::uint8_t) ((value >> 7) & 0x7f);
+        }
+        else
+        {
+            status = (std::uint8_t) (0xB0 | ch); d1 = (std::uint8_t) std::clamp (row.number.load (std::memory_order_relaxed), 0, 127); d2 = (std::uint8_t) value;
+        }
+    }
+
+    /** Hit-based rows without slew go out one sample before their note, so a synth has the new value when the note lands. */
+    void mapOnHit (int i, int port, int ch, std::int64_t when) noexcept
+    {
+        for (size_t r = 0; r < kNumMapRows; ++r)
+        {
+            auto& row = outMap[r];
+            const int dest = row.dest.load (std::memory_order_relaxed), source = row.source.load (std::memory_order_relaxed);
+            if (dest == DestOff || row.track.load (std::memory_order_relaxed) != i || source > OutRandom) continue;
+            if (row.slewMs.load (std::memory_order_relaxed) > 0 || poolCount >= kPoolSize) continue;
+            const float x = mapSignal (i, source, 0.0);
+            auto& st = mapState[r];
+            st.value = x;
+            const int value = mapValue (row, dest, x);
+            if (value == st.sent) continue;
+            st.sent = value;
+            st.dest = dest; st.port = port; st.ch = ch;
+            row.live.store (x, std::memory_order_relaxed);
+            Pending m { when - 1, 0, (std::uint8_t) port, 0, 0, 0 };
+            mapMessage (row, dest, ch, value, m.status, m.d1, m.d2);
+            pool[(size_t) poolCount++] = m;
+        }
+    }
+
+    /** Everything that moves between hits, or that glides. Capped at one message every 5 ms per row. */
+    template <class Sink>
+    void updateOutMap (Sink& out, double ppq, int numSamples) noexcept
+    {
+        const double seconds = numSamples / sr;
+        for (size_t r = 0; r < kNumMapRows; ++r)
+        {
+            auto& row = outMap[r];
+            const int dest = row.dest.load (std::memory_order_relaxed);
+            if (dest == DestOff) continue;
+            const int i = std::clamp (row.track.load (std::memory_order_relaxed), 0, kNumTracks - 1);
+            if (! tracks[(size_t) i].active) continue;
+            const auto& p = params[(size_t) i];
+            auto& st = mapState[r];
+            const float target = mapSignal (i, row.source.load (std::memory_order_relaxed), ppq);
+            const int slew = row.slewMs.load (std::memory_order_relaxed);
+            st.value = slew > 0 ? st.value + (target - st.value) * (float) (1.0 - std::exp (-seconds * 1000.0 / slew)) : target;
+            const int value = mapValue (row, dest, st.value);
+            const bool moved = dest == DestPitch ? std::abs (value - st.sent) >= 4 || (value != st.sent && slew == 0) : value != st.sent;
+            if (! moved || sampleClock < st.nextSend) continue;
+            st.sent = value;
+            st.dest = dest;
+            st.port = std::clamp (p.i (pPort), 0, kNumSlots);
+            st.ch = std::clamp (p.i (pCh), 1, 16) - 1;
+            st.nextSend = sampleClock + (std::int64_t) (0.005 * sr);
+            row.live.store (st.value, std::memory_order_relaxed);
+            std::uint8_t status = 0, d1 = 0, d2 = 0;
+            mapMessage (row, dest, st.ch, value, status, d1, d2);
+            out.emit (numSamples - 1, st.port, status, d1, d2);
+        }
+    }
+
     /** Sends what falls inside this block. Each note owns its pitch through a token: when a pitch is retriggered, the
         new note takes over and the old note-off does nothing, so overlapping gates never cut a note short. */
     template <class Sink>
@@ -654,6 +773,8 @@ private:
                 slot = e.token;
                 out.emit (offset, e.port, e.status, e.d1, e.d2);
             }
+            else if ((e.status & 0xf0) != 0x80)
+                out.emit (offset, e.port, e.status, e.d1, e.d2);     // output map: CC or pitch wheel
             else if (slot == e.token)
             {
                 slot = 0;
@@ -666,6 +787,12 @@ private:
     void stopAll (Sink& out, int offset) noexcept
     {
         poolCount = 0;
+        for (auto& st : mapState)
+        {   // a bend left in the air would detune the synth until the next message
+            if (st.dest == DestPitch && st.sent >= 0 && st.sent != kPitchCentre)
+                out.emit (offset, st.port, 0xE0 | st.ch, kPitchCentre & 0x7f, kPitchCentre >> 7);
+            st = {};
+        }
         for (int port = 0; port <= kNumSlots; ++port)
             for (int ch = 0; ch < 16; ++ch)
                 for (int note = 0; note < 128; ++note)
@@ -703,6 +830,7 @@ private:
     std::array<Track, kNumTracks> tracks;
     std::array<Pending, kPoolSize> pool {}, dueList {};
     int poolCount = 0;
+    std::array<MapState, kNumMapRows> mapState {};
     std::array<std::array<std::array<std::uint32_t, 128>, 16>, kNumSlots + 1> owner {};
 };
 } // namespace segg

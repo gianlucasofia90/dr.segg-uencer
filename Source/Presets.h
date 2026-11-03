@@ -4,6 +4,7 @@
 // long loops of different lengths, mutation in small amounts, gates much longer or much shorter than the step.
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SeggCore.h"
+#include "MidiMap.h"
 
 class SeggProcessor;
 
@@ -26,7 +27,9 @@ struct PresetEdit
 {
     juce::AudioProcessorValueTreeState& s;
     std::array<Pattern, kNumTracks>& patterns;
+    std::array<OutMapRow, kNumMapRows>& outMap;
     void global (const char* id, float value);
+    void out (int row, int oneBasedTrack, int source, int dest, int number, int lo, int hi, int slewMs);
     TrackEdit track (int oneBased) { return { s, patterns[(size_t) oneBased - 1], oneBased - 1 }; }
 };
 

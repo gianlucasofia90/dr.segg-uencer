@@ -9,7 +9,7 @@ class SeggView : public juce::Component, private juce::Timer
 public:
     static constexpr int kW = 1280, kH = 800;
 
-    explicit SeggView (SeggProcessor& p) : proc (p), list (p), view (p), routing (p)
+    explicit SeggView (SeggProcessor& p) : proc (p), list (p), view (p), routing (p), mapPage (p)
     {
         setLookAndFeel (&lnf);
         using K = segg::Control::Kind;
@@ -29,6 +29,7 @@ public:
         list.onSelect = [this] (int t) { selectTrack (t); };
         addAndMakeVisible (view);
         addChildComponent (routing);
+        addChildComponent (mapPage);
 
         for (int t = 0; t < segg::kNumTypes; ++t)
         {
@@ -39,12 +40,16 @@ public:
 
         for (auto* b : { &prevBtn, &nextBtn, &saveBtn, &delBtn, &panicBtn }) addAndMakeVisible (b);
         addAndMakeVisible (routingBtn);
+        addAndMakeVisible (mapBtn);
         prevBtn.setButtonText ("<"); nextBtn.setButtonText (">");
         saveBtn.setButtonText ("SAVE"); delBtn.setButtonText ("DEL");
         panicBtn.setButtonText ("PANIC");
         routingBtn.setButtonText ("ROUTING");
         routingBtn.setClickingTogglesState (true);
         routingBtn.onClick = [this] { showRouting (routingBtn.getToggleState()); };
+        mapBtn.setButtonText ("MIDI MAP");
+        mapBtn.setClickingTogglesState (true);
+        mapBtn.onClick = [this] { showMidiMap (mapBtn.getToggleState()); };
         panicBtn.onClick = [this] { proc.panic(); };
         addAndMakeVisible (presetBox);
         presetBox.getProperties().set ("sgDark", true);
@@ -75,9 +80,10 @@ public:
         sendLookAndFeelChange();
         setSize (kW, kH);
         selectTrack (0);
+        addMouseListener (this, true);       // right click on any control: MIDI Learn
         startTimerHz (30);
     }
-    ~SeggView() override { setLookAndFeel (nullptr); }
+    ~SeggView() override { removeMouseListener (this); setLookAndFeel (nullptr); }
 
     void selectTrack (int t)
     {
@@ -88,9 +94,43 @@ public:
         repaint();
     }
 
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu() || e.eventComponent == nullptr) return;
+        auto* ctl = dynamic_cast<segg::Control*> (e.eventComponent);
+        if (ctl == nullptr) ctl = e.eventComponent->findParentComponentOfClass<segg::Control>();
+        if (ctl == nullptr) return;
+        const auto id = ctl->getParamId();
+        auto* prm = proc.state.getParameter (id);
+        if (prm == nullptr) return;
+        const int row = proc.findMapRow (id);
+        juce::PopupMenu menu;
+        menu.addSectionHeader (prm->getName (64));
+        menu.addItem (1, "MIDI Learn");
+        menu.addItem (2, "Remove mapping", row >= 0);
+        juce::Component::SafePointer<SeggView> self (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (ctl), [self, id, row] (int r) {
+            if (self == nullptr) return;
+            if (r == 1) self->proc.startLearn (id);
+            if (r == 2) self->proc.clearMapRow (row);
+        });
+    }
+
+    void showMidiMap (bool on, bool output = false)
+    {
+        mapBtn.setToggleState (on, juce::dontSendNotification);
+        routingBtn.setToggleState (false, juce::dontSendNotification);
+        mapPage.showOutput (output || mapPage.showingOutput());
+        updateVisibility();
+        repaint();
+    }
+
+    void setWindowsHelp (bool on) { routing.setWindowsHelp (on); }
+
     void showRouting (bool on)
     {
         routingBtn.setToggleState (on, juce::dontSendNotification);
+        mapBtn.setToggleState (false, juce::dontSendNotification);
         routing.refresh();
         updateVisibility();
         repaint();
@@ -180,6 +220,17 @@ public:
             glassPanel (g, { 408, 88, 856, 488 }, "Outputs", "Routing");
             return;
         }
+        if (mapBtn.getToggleState())
+        {
+            glassPanel (g, { 408, 88, 856, 488 }, "Note, CC, pitch wheel", "MIDI Map");
+            g.setColour (c::onPlate.withAlpha (0.85f));
+            g.setFont (medium (12.5f));
+            g.drawFittedText (mapPage.showingOutput()
+                                  ? "Each row turns what a track is doing into CC or pitch wheel, on the track's own port and channel. Switch off NOTES on a track to use it only as a modulator."
+                                  : "Right click any control for MIDI Learn. Controllers must reach this track: in Live set its MIDI From to the controller and Monitor to In.",
+                              1044, kDeckY + 24, 204, 150, juce::Justification::topLeft, 9, 1.0f);
+            return;
+        }
         const int type = proc.ti (track, pType);
         glassPanel (g, { 408, 88, 856, 488 }, "Track " + juce::String (track + 1), kTypeNames[juce::jlimit (0, kNumTypes - 1, type)]);
 
@@ -201,11 +252,18 @@ public:
         if (port == 0) status = "HOST OUTPUT";
         else if (! proc.direct.isSlotLive (port - 1)) { status = "PORT " + juce::String (port) + " NOT ASSIGNED"; g.setColour (segg::c::accent); }
         else status = "PORT " + juce::String (port) + " READY";
-        g.drawText (status, 1044, kDeckY + 146, 204, 14, juce::Justification::left);
-        if (! proc.uiPlaying.load())
+        if (port > 0 && proc.direct.isSlotFailed (port - 1)) { status = "PORT " + juce::String (port) + " UNAVAILABLE"; g.setColour (segg::c::accent); }
+        g.drawText (status, 1044, kDeckY + 154, 204, 12, juce::Justification::left);
+        const int learning = proc.learnRow.load();
+        if (learning >= 0)
+        {
+            g.setColour (segg::c::accent);
+            g.drawText ("LEARN: MOVE A CONTROL", 1044, kDeckY + 168, 204, 12, juce::Justification::left);
+        }
+        else if (! proc.uiPlaying.load())
         {
             g.setColour (segg::c::onPlate.withAlpha (0.7f));
-            g.drawText (proc.state.getRawParameterValue ("gsync")->load() > 0.5f ? "PRESS RUN TO START" : "START THE HOST TRANSPORT", 1044, kDeckY + 164, 204, 14, juce::Justification::left);
+            g.drawText (proc.state.getRawParameterValue ("gsync")->load() > 0.5f ? "PRESS RUN TO START" : "START THE HOST TRANSPORT", 1044, kDeckY + 168, 204, 12, juce::Justification::left);
         }
     }
 
@@ -215,9 +273,10 @@ public:
         prevBtn.setBounds (368, 20, 36, 30);
         presetBox.setBounds (436, 23, 180, 22);
         nextBtn.setBounds (654, 20, 36, 30);
-        saveBtn.setBounds (696, 20, 62, 30);
-        delBtn.setBounds (760, 20, 54, 30);
-        routingBtn.setBounds (816, 20, 112, 30);
+        saveBtn.setBounds (692, 20, 56, 30);
+        delBtn.setBounds (746, 20, 48, 30);
+        routingBtn.setBounds (794, 20, 102, 30);
+        mapBtn.setBounds (892, 20, 106, 30);
         at ("gsync", (int) kConsoleX + 10, 15, 78, 40);
         at ("gbpm", (int) kConsoleX + 108, 15, 62, 40);
         at ("grun", (int) kRunX, 20, 87, 32);
@@ -230,6 +289,7 @@ public:
         panicBtn.setBounds (290, 100, 89, 30);
         view.setBounds (424, 144, 440, 416);
         routing.setBounds (424, 98, 824, 462);
+        mapPage.setBounds (424, 98, 824, 462);
         for (int t = 0; t < segg::kNumTypes; ++t) tabs[t]->setBounds (604 + t * 128, 96, 126, 42);
 
         routeOffset->setBounds (1044, kDeckY + 22, 204, 38);
@@ -266,6 +326,7 @@ private:
         add (pSeed, "Seed", K::Box, 0);
         add (pPort, "Output", K::Menu, 0);   add (pCh, "Channel", K::Box, 0);
         add (pLsrc, "Link From", K::Menu, 0); add (pLmode, "Link Mode", K::Menu, 0);
+        add (pNotes, "NOTES", K::Toggle, 0);
 
         add (pEsteps, "Steps", K::Knob, 1 + Euclid);    add (pEpulses, "Pulses", K::Knob, 1 + Euclid);
         add (pErot, "Rotate", K::Knob, 1 + Euclid);     add (pEacc, "Accents", K::Knob, 1 + Euclid);
@@ -299,7 +360,9 @@ private:
         place (pChord, 718, row2, 84, 40);   place (pRolln, 810, row2, 62, 38);  place (pDelay, 880, row2, 66, 38);
         place (pSeed, 954, row2, 62, 38);
         place (pPort, 1044, row3, 100, 40);  place (pCh, 1152, row3, 96, 38);
-        place (pLsrc, 1044, row3 + 56, 100, 40); place (pLmode, 1152, row3 + 56, 96, 40);
+        place (pLsrc, 1044, row3 + 52, 100, 40); place (pLmode, 1152, row3 + 52, 96, 40);
+        place (pNotes, 1044, row3 + 98, 100, 28);
+        if (auto* c = getTrackControl (pNotes)) c->button.getProperties().set ("sgDeck", true);
 
         // sequencer controls beside the well: knobs on a 4-column grid, then menus and switches two by two
         auto isKnob = [this] (P p) {
@@ -330,16 +393,18 @@ private:
     void updateVisibility()
     {
         using namespace segg;
-        const bool route = routingBtn.getToggleState();
+        const bool routed = routingBtn.getToggleState(), mapped = mapBtn.getToggleState(), route = routed || mapped;
         const int type = proc.ti (track, pType);
         for (auto& e : trackControls)
         {
-            const bool shown = e.group == 0 ? ! (route && (e.param == pPort || e.param == pCh || e.param == pLsrc || e.param == pLmode)) : ! route && e.group == type + 1;
+            const bool side = e.param == pPort || e.param == pCh || e.param == pLsrc || e.param == pLmode || e.param == pNotes;
+            const bool shown = e.group == 0 ? ! (route && side) : ! route && e.group == type + 1;
             if (e.control->isVisible() != shown) e.control->setVisible (shown);
         }
         view.setVisible (! route);
-        routing.setVisible (route);
-        for (auto* ctl : { routeOffset.get(), routeReset.get(), routeKey.get() }) ctl->setVisible (route);
+        routing.setVisible (routed);
+        mapPage.setVisible (mapped);
+        for (auto* ctl : { routeOffset.get(), routeReset.get(), routeKey.get() }) ctl->setVisible (routed);
         routeOffset->getProperties().set ("sgDark", true);
         routeOffset->setCaptionColour (c::onPlate);
         for (int t = 0; t < kNumTypes; ++t)
@@ -364,6 +429,7 @@ private:
             if (type != lastType) { lastType = type; repaint(); }
             updateVisibility();
             if (routing.isVisible()) routing.repaint();
+            if (mapPage.isVisible()) mapPage.sync();
             repaint (1040, kDeckY + 140, 240, 50);
             if (const auto bpm = proc.uiBpm.load(); bpm != bpmShown) { bpmShown = bpm; repaint ((int) kConsoleX, 8, 1280 - (int) kConsoleX, 54); }
             if (presetBox.getSelectedItemIndex() != proc.presets.getCurrent()) refreshPresets();
@@ -382,12 +448,13 @@ private:
     segg::TrackList list;
     segg::EngineView view;
     segg::RoutingPage routing;
+    segg::MidiMapPage mapPage;
     juce::OwnedArray<segg::TypeTab> tabs;
     juce::OwnedArray<segg::Control> globals, owned;
     juce::HashMap<juce::String, segg::Control*> globalById;
     std::vector<Entry> trackControls;
     std::unique_ptr<segg::Control> routeOffset, routeReset, routeKey;
-    juce::TextButton prevBtn, nextBtn, saveBtn, delBtn, routingBtn, panicBtn;
+    juce::TextButton prevBtn, nextBtn, saveBtn, delBtn, routingBtn, mapBtn, panicBtn;
     juce::ComboBox presetBox;
     int track = 0, slowTick = 0, lastType = -1;
     bool freeShown = false;
@@ -427,6 +494,8 @@ public:
     // used by the headless tests
     void selectTrack (int t)          { ui.selectTrack (t); }
     void showRouting (bool on)        { ui.showRouting (on); }
+    void showMidiMap (bool on, bool output) { ui.showMidiMap (on, output); }
+    void setWindowsHelp (bool on)     { ui.setWindowsHelp (on); }
     void setLaneForSnapshot (int l)   { ui.setLaneForSnapshot (l); }
     void tickForSnapshot()            { ui.tickForSnapshot(); }
 

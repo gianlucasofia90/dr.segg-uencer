@@ -101,6 +101,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SeggProcessor::createLayout(
         l.add (fparam (id (pPsize), nm + "Phys Size", 0, 100, 30, "%"));
         l.add (bparam (id (pPquant), nm + "Phys Quantize", false));
         l.add (fparam (id (pPkick), nm + "Phys Kick", 0, 100, 0, "%"));
+        // output
+        l.add (bparam (id (pNotes), nm + "Notes", true));
     }
     return l;
 }
@@ -120,6 +122,7 @@ SeggProcessor::SeggProcessor()
     gKeyIn = state.getRawParameterValue ("gkeyin");     gOffset = state.getRawParameterValue ("goffset");
     pullParams();
     presets.resetPatterns();
+    startTimerHz (60);
 }
 
 bool SeggProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -176,8 +179,14 @@ void SeggProcessor::runBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer
     const bool keyIn = gKeyIn->load() > 0.5f;
     for (const auto m : midi)
     {
-        const auto msg = m.getMessage();
-        if (keyIn && msg.isNoteOn()) heldKey = msg.getNoteNumber();
+        if (m.numBytes < 2) continue;
+        const int status = m.data[0], d1 = m.data[1], d2 = m.numBytes > 2 ? m.data[2] : 0;
+        handleLearn (status, d1, d2);
+        const bool taken = applyInputMap (inMap, status, d1, d2, [this] (int param, float norm) {
+            const auto w = mapFifo.write (1);       // dropped if the message thread has stalled: the next value replaces it
+            if (w.blockSize1 + w.blockSize2 > 0) mapValues[(size_t) (w.blockSize1 > 0 ? w.startIndex1 : w.startIndex2)] = { param, norm };
+        });
+        if (keyIn && ! taken && (status & 0xf0) == 0x90 && d2 > 0) heldKey = d1;
     }
     midi.clear();
     pullParams();
@@ -222,6 +231,71 @@ void SeggProcessor::runBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer
 
 void SeggProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) { runBlock (buffer, midi, false); }
 void SeggProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) { runBlock (buffer, midi, true); }
+
+// ---------------- input map
+
+void SeggProcessor::handleLearn (int status, int d1, int d2) noexcept
+{
+    const int row = learnRow.load (std::memory_order_relaxed);
+    if (row < 0 || row >= kNumMapRows) return;
+    const int kind = status & 0xf0;
+    const bool noteOn = kind == 0x90 && d2 > 0;
+    if (! noteOn && kind != 0xB0 && kind != 0xE0) return;
+    auto& r = inMap[(size_t) row];
+    r.channel = (status & 15) + 1;
+    r.number = kind == 0xE0 ? 0 : d1;
+    r.mode = noteOn ? ModeToggle : ModeAbsolute;     // a key switches, a knob or a wheel sweeps
+    r.toggled = 0;
+    r.type = noteOn ? InNote : (kind == 0xB0 ? InCC : InPitch);
+    learnRow.store (-1);
+}
+
+int SeggProcessor::findMapRow (const juce::String& paramId) const
+{
+    if (auto* prm = state.getParameter (paramId))
+        for (int i = 0; i < kNumMapRows; ++i)
+            if (inMap[(size_t) i].param.load() == prm->getParameterIndex()) return i;
+    return -1;
+}
+
+int SeggProcessor::startLearn (const juce::String& paramId)
+{
+    auto* prm = state.getParameter (paramId);
+    if (prm == nullptr) return -1;
+    int row = findMapRow (paramId);
+    for (int i = 0; i < kNumMapRows && row < 0; ++i)
+        if (inMap[(size_t) i].param.load() < 0) row = i;
+    if (row < 0) return -1;
+    inMap[(size_t) row].param = prm->getParameterIndex();
+    learnRow.store (row);
+    return row;
+}
+
+void SeggProcessor::clearMapRow (int row)
+{
+    if (learnRow.load() == row) learnRow.store (-1);
+    inMap[(size_t) row].clear();
+}
+
+void SeggProcessor::pumpMidiMap()
+{
+    const auto r = mapFifo.read (mapFifo.getNumReady());
+    const auto& params = getParameters();
+    auto apply = [&] (int start, int n) {
+        for (int i = 0; i < n; ++i)
+        {
+            const auto v = mapValues[(size_t) (start + i)];
+            if (auto* prm = params[v.param])
+            {
+                prm->beginChangeGesture();
+                prm->setValueNotifyingHost (v.norm);
+                prm->endChangeGesture();
+            }
+        }
+    };
+    apply (r.startIndex1, r.blockSize1);
+    apply (r.startIndex2, r.blockSize2);
+}
 
 // ---------------- state
 
@@ -282,10 +356,88 @@ void SeggProcessor::setPortSlot (int slot, const juce::String& deviceId)
     if (direct.getSlot (slot) != deviceId) direct.setSlot (slot, deviceId);
 }
 
+juce::ValueTree SeggProcessor::inMapToTree() const
+{
+    juce::ValueTree tree ("INMAP");
+    const auto& params = getParameters();
+    for (auto& row : inMap)
+    {
+        juce::ValueTree node ("ROW");
+        juce::String id;     // by id: parameter indexes can move between versions
+        if (auto* prm = dynamic_cast<juce::RangedAudioParameter*> (params[row.param.load()])) id = prm->getParameterID();
+        node.setProperty ("type", row.type.load(), nullptr);
+        node.setProperty ("ch", row.channel.load(), nullptr);
+        node.setProperty ("num", row.number.load(), nullptr);
+        node.setProperty ("param", id, nullptr);
+        node.setProperty ("lo", row.lo.load(), nullptr);
+        node.setProperty ("hi", row.hi.load(), nullptr);
+        node.setProperty ("mode", row.mode.load(), nullptr);
+        tree.appendChild (node, nullptr);
+    }
+    return tree;
+}
+
+void SeggProcessor::inMapFromTree (const juce::ValueTree& tree)
+{
+    for (int i = 0; i < kNumMapRows; ++i)
+    {
+        auto& row = inMap[(size_t) i];
+        row.clear();
+        const auto node = tree.getChild (i);
+        if (! node.isValid()) continue;
+        auto* prm = state.getParameter (node["param"].toString());
+        if (prm == nullptr) continue;
+        row.param = prm->getParameterIndex();
+        row.channel = juce::jlimit (0, 16, (int) node["ch"]);
+        row.number = juce::jlimit (0, 127, (int) node["num"]);
+        row.lo = juce::jlimit (0, 100, (int) node["lo"]);
+        row.hi = juce::jlimit (0, 100, (int) node["hi"]);
+        row.mode = juce::jlimit (0, kNumInModes - 1, (int) node["mode"]);
+        row.type = juce::jlimit (0, kNumInTypes - 1, (int) node["type"]);
+    }
+}
+
+juce::ValueTree SeggProcessor::outMapToTree() const
+{
+    juce::ValueTree tree ("OUTMAP");
+    for (auto& row : engine.outMap)
+    {
+        juce::ValueTree node ("ROW");
+        node.setProperty ("track", row.track.load(), nullptr);
+        node.setProperty ("source", row.source.load(), nullptr);
+        node.setProperty ("dest", row.dest.load(), nullptr);
+        node.setProperty ("num", row.number.load(), nullptr);
+        node.setProperty ("lo", row.lo.load(), nullptr);
+        node.setProperty ("hi", row.hi.load(), nullptr);
+        node.setProperty ("slew", row.slewMs.load(), nullptr);
+        tree.appendChild (node, nullptr);
+    }
+    return tree;
+}
+
+void SeggProcessor::outMapFromTree (const juce::ValueTree& tree)
+{
+    for (int i = 0; i < kNumMapRows; ++i)
+    {
+        auto& row = engine.outMap[(size_t) i];
+        row.clear();
+        const auto node = tree.getChild (i);
+        if (! node.isValid()) continue;
+        row.track = juce::jlimit (0, kNumTracks - 1, (int) node["track"]);
+        row.source = juce::jlimit (0, kNumOutSources - 1, (int) node["source"]);
+        row.number = juce::jlimit (0, 127, (int) node["num"]);
+        row.lo = juce::jlimit (0, 100, (int) node["lo"]);
+        row.hi = juce::jlimit (0, 100, (int) node["hi"]);
+        row.slewMs = juce::jlimit (0, 5000, (int) node["slew"]);
+        row.dest = juce::jlimit (0, kNumOutDests - 1, (int) node["dest"]);
+    }
+}
+
 std::unique_ptr<juce::XmlElement> SeggProcessor::createPresetXml()
 {
     auto copy = state.copyState();
     copy.appendChild (patternsToTree(), nullptr);
+    copy.appendChild (outMapToTree(), nullptr);      // the output map is part of the music
     return copy.createXml();
 }
 
@@ -293,11 +445,11 @@ bool SeggProcessor::applyPresetXml (const juce::XmlElement& xml)
 {
     if (! xml.hasTagName (state.state.getType())) return false;
     auto tree = juce::ValueTree::fromXml (xml);
-    const auto patterns = tree.getChildWithName ("PATTERNS");
-    tree.removeChild (patterns, nullptr);
-    tree.removeChild (tree.getChildWithName ("PORTS"), nullptr);
+    const auto patterns = tree.getChildWithName ("PATTERNS"), outMap = tree.getChildWithName ("OUTMAP");
+    for (auto* name : { "PATTERNS", "OUTMAP", "PORTS", "INMAP" }) tree.removeChild (tree.getChildWithName (name), nullptr);
     state.replaceState (tree);
     patternsFromTree (patterns);
+    outMapFromTree (outMap);
     return true;
 }
 
@@ -306,6 +458,7 @@ void SeggProcessor::getStateInformation (juce::MemoryBlock& dest)
     if (auto xml = createPresetXml())
     {
         xml->addChildElement (portsToTree().createXml().release());
+        xml->addChildElement (inMapToTree().createXml().release());    // controllers, like ports, stay out of presets
         xml->setAttribute ("presetIndex", presets.getCurrent());
         xml->setAttribute ("uiScale", (double) uiScale.load());
         copyXmlToBinary (*xml, dest);
@@ -319,6 +472,7 @@ void SeggProcessor::setStateInformation (const void* data, int size)
         if (applyPresetXml (*xml))
         {
             if (auto* ports = xml->getChildByName ("PORTS")) portsFromTree (juce::ValueTree::fromXml (*ports));
+            if (auto* map = xml->getChildByName ("INMAP")) inMapFromTree (juce::ValueTree::fromXml (*map));
             presets.markCurrent (xml->getIntAttribute ("presetIndex", 0));
             uiScale = (float) juce::jlimit (0.6, 2.0, xml->getDoubleAttribute ("uiScale", 1.0));
         }
@@ -366,6 +520,12 @@ TrackEdit& TrackEdit::pads (std::initializer_list<int> pitches)
 }
 
 void PresetEdit::global (const char* id, float value) { setParam (s, id, value); }
+
+void PresetEdit::out (int row, int oneBasedTrack, int source, int dest, int number, int lo, int hi, int slewMs)
+{
+    auto& r = outMap[(size_t) row];
+    r.track = oneBasedTrack - 1; r.source = source; r.number = number; r.lo = lo; r.hi = hi; r.slewMs = slewMs; r.dest = dest;
+}
 
 static constexpr int R = TrackEdit::R;
 
@@ -479,6 +639,16 @@ const std::vector<FactoryPreset>& factoryPresets()
                 tr ("on", 1) ("port", (float) t) ("ch", 1) ("type", (float) ((t - 1) % kNumTypes)) ("note", 36.0f + 3.0f * (float) (t - 1)) ("prob", 80);
             }
         } },
+        { "CC Lanes", [] (PresetEdit& e) {
+            e.global ("groot", 9); e.global ("gscale", 2);
+            e.track (1) ("on", 1) ("type", Turing) ("rate", 8) ("tlen", 8) ("tknob", 92) ("trange", 14) ("tdens", 70) ("note", 45) ("gate", 80);
+            e.track (2) ("on", 1) ("type", Turing) ("rate", 11) ("tlen", 11) ("tknob", 88) ("notes", 0) ("ch", 1);
+            e.out (0, 2, OutPosX, DestCC, 74, 20, 90, 60);
+            e.track (3) ("on", 1) ("type", Physics) ("pcount", 1) ("pspeed", 12) ("notes", 0) ("ch", 1);
+            e.out (1, 3, OutPosY, DestCC, 71, 10, 70, 0);
+            e.track (4) ("on", 1) ("type", Euclid) ("rate", 5) ("esteps", 7) ("epulses", 3) ("notes", 0) ("ch", 1);
+            e.out (2, 4, OutRandom, DestPitch, 0, 42, 58, 180);
+        } },
     };
     return p;
 }
@@ -518,6 +688,7 @@ void PresetManager::resetPatterns()
             pat.cart[(size_t) i].set (1, (i / 4) * 5 + (i % 4) * 2);
         }
     }
+    for (auto& row : proc.engine.outMap) row.clear();
 }
 
 void PresetManager::load (int index)
@@ -527,7 +698,7 @@ void PresetManager::load (int index)
     if (index < numFactory())
     {
         clearToDefaults();
-        PresetEdit e { proc.state, proc.engine.patterns };
+        PresetEdit e { proc.state, proc.engine.patterns, proc.engine.outMap };
         factoryPresets()[(size_t) index].build (e);
     }
     else if (auto xml = juce::XmlDocument::parse (userFiles[index - numFactory()]))

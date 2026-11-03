@@ -9,5 +9,7 @@
 - On/off parameters are 2-item choices (`bparam` in `Params.h`), so pluginval strictness 8 passes the state-restore test.
 - Step and pad data are not host parameters: they live in `Engine::patterns` as atomics and are saved as child nodes of the state. Port assignments are saved with the session but not in presets, because they belong to the machine.
 - Ableton Live merges a plugin's MIDI output onto one channel, and AU has no MIDI out there at all. That is why `DirectMidi.h` exists: separate destinations in Live must go through direct or virtual ports.
+- `Source/MidiMap.h` holds the two MIDI map tables. The input table is saved with the session (controllers, like ports, belong to the machine); the output table is saved in presets too. Parameters are never set on the audio thread: input values go through a FIFO to `pumpMidiMap()` on the message thread. The Random signal has its own generator, so mapping a track never changes its notes.
+- Windows has no virtual MIDI ports (`createNewDevice` does not exist there): users need loopMIDI, whose port shows up as an ordinary device.
 - Release: update `CHANGELOG.md` and `project(... VERSION x.y.z)` in `CMakeLists.txt`, then push tag `vx.y.z`. CI builds and publishes the Release.
 - The user is Italian: user-facing docs (README, CHANGELOG, scripts) are in Italian. The interface is in English, like SONIC GRAIN.

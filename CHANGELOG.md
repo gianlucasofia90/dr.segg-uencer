@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.3] - 2026-11-03
+- **MIDI MAP**, nuova pagina con due tabelle da 16 righe.
+- Input: note, CC e pitch wheel muovono qualsiasi parametro, con Min, Max, Absolute o Toggle. MIDI Learn dal tasto della riga o con clic destro su un controllo.
+- Output: ogni traccia invia CC o pitch wheel, dai segnali Note, Velocity, Random, Gate, Position X e Position Y, con Min, Max e Slew. La pitch wheel torna al centro con lo stop.
+- Nuovo interruttore NOTES su ogni traccia: spento, la traccia lavora solo come modulatore.
+- Nuovo preset `CC Lanes`.
+- ROUTING su Windows: istruzioni per loopMIDI, perché Windows non ha porte virtuali proprie. Le porte nuove compaiono da sole.
+- Le porte che non si aprono ora sono segnate `UNAVAILABLE` invece di restare mute senza spiegazioni.
+- Su macOS e Linux una seconda istanza crea la sua porta virtuale invece di fallire.
+- Corretto: su Windows una porta virtuale salvata su Mac viene segnalata come non disponibile.
+
 ## [0.1.2] - 2026-11-03
 - Finestra ridimensionabile (dal 60 al 200 %) con le proporzioni bloccate; la dimensione si salva con il progetto.
 - Grafica più nitida: a ogni dimensione l'interfaccia viene ridisegnata in vettoriale, e il font pixel cade sulla sua griglia.

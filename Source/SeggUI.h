@@ -331,6 +331,14 @@ public:
     }
 };
 
+/** A right click belongs to the MIDI Learn menu: it must not also flip the switch. */
+class PlateButton : public juce::TextButton
+{
+public:
+    void mouseDown (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) juce::TextButton::mouseDown (e); }
+    void mouseUp (const juce::MouseEvent& e) override   { if (! e.mods.isPopupMenu()) juce::TextButton::mouseUp (e); }
+};
+
 /** Parameter-bound control. Kinds: Knob, Box (number bar), VSlider, HBar, Toggle, Menu. Empty label = no caption.
     Knobs carry their caption between the knob and the value; the other kinds above the control. */
 class Control : public juce::Component
@@ -422,10 +430,11 @@ public:
         }
     }
 
+    const juce::String& getParamId() const { return paramId; }
     void setCaptionColour (juce::Colour col) { caption.setColour (juce::Label::textColourId, col); }
 
     juce::Slider slider;
-    juce::TextButton button;
+    PlateButton button;
     juce::ComboBox combo;
 
 private:
@@ -1119,7 +1128,8 @@ private:
     int type;
 };
 
-/** Assigns the 8 direct ports. Hardware interface ports, or virtual ports that Live can use as a MIDI input. */
+/** Assigns the 16 direct ports: hardware interface ports, or virtual ports that Live can use as a MIDI input.
+    macOS and Linux can create a virtual port; Windows has none of its own, so there a loopMIDI port shows up here. */
 class RoutingPage : public juce::Component
 {
 public:
@@ -1139,13 +1149,19 @@ public:
         rescan.setButtonText ("RESCAN");
         rescan.onClick = [this] { refresh(); };
         refresh();
+        // a port created in loopMIDI, or an interface plugged in, shows up without pressing anything
+        deviceWatcher = juce::MidiDeviceListConnection::make ([this] { refresh(); });
     }
+
+    void setWindowsHelp (bool on) { windowsHelp = on; repaint(); }
 
     void refresh()
     {
+        for (auto* box : boxes) if (box->isPopupActive()) return;
+
         // a device that was unplugged may be back
         for (int i = 0; i < kNumSlots; ++i)
-            if (! proc.direct.isSlotLive (i) && proc.direct.getSlot (i).isNotEmpty()) proc.direct.setSlot (i, proc.direct.getSlot (i));
+            if (proc.direct.isSlotFailed (i)) proc.direct.setSlot (i, proc.direct.getSlot (i));
 
         auto devices = juce::MidiOutput::getAvailableDevices();
         deviceIds.clear();
@@ -1163,9 +1179,9 @@ public:
             const auto current = proc.direct.getSlot (i);
             const int found = deviceIds.indexOf (current);
             if (current.isEmpty()) box->setSelectedId (1, juce::dontSendNotification);
-            else if (current == DirectMidi::virtualId()) box->setSelectedId (2, juce::dontSendNotification);
+            else if (current == DirectMidi::virtualId() && box->indexOfItemId (2) >= 0) box->setSelectedId (2, juce::dontSendNotification);
             else if (found >= 0) box->setSelectedId (found + 3, juce::dontSendNotification);
-            else box->setText ("Missing device", juce::dontSendNotification);
+            else box->setText (current == DirectMidi::virtualId() ? "Virtual port: not on this system" : "Missing device", juce::dontSendNotification);
         }
         repaint();
     }
@@ -1175,33 +1191,42 @@ public:
         for (int i = 0; i < kNumSlots; ++i)
         {
             const auto box = boxes[i]->getBounds();
+            const bool failed = proc.direct.isSlotFailed (i);
             g.setFont (black (13.0f));
             g.setColour (c::ink);
             g.drawText (juce::String (i + 1), box.getX() - 44, box.getY(), 24, 22, juce::Justification::centredLeft);
             auto led = juce::Rectangle<float> (10, 10).withCentre ({ (float) box.getX() - 14, (float) box.getY() + 11 });
-            g.setColour (proc.direct.isSlotLive (i) ? c::go : c::inkSoft.withAlpha (0.3f));
+            g.setColour (failed ? c::signal : (proc.direct.isSlotLive (i) ? c::go : c::inkSoft.withAlpha (0.3f)));
             g.fillEllipse (led);
 
             juce::StringArray used;
             for (int t = 0; t < kNumTracks; ++t) if (proc.ti (t, pPort) == i + 1) used.add ("T" + juce::String (t + 1));
             g.setFont (pixel (10.0f));
-            g.setColour (c::inkSoft);
-            g.drawText (used.isEmpty() ? juce::String ("-") : used.joinIntoString (" "), box.getRight() + 8, box.getY(), kColumnW - kBoxW - 58, 22,
-                        juce::Justification::centredLeft, true);
+            g.setColour (failed ? c::signal : c::inkSoft);
+            g.drawText (failed ? juce::String ("UNAVAILABLE") : (used.isEmpty() ? juce::String ("-") : used.joinIntoString (" ")),
+                        box.getRight() + 8, box.getY(), kColumnW - kBoxW - 58, 22, juce::Justification::centredLeft, true);
         }
-        auto r = juce::Rectangle<int> (0, 284, getWidth() - 8, getHeight() - 284);
+        auto r = juce::Rectangle<int> (0, 278, getWidth() - 8, getHeight() - 278);
         struct Note { const char* head; const char* body; };
-        for (auto n : { Note { "HARDWARE", "Assign the ports of your MIDI interface above, then choose Port and Channel on each track." },
-                        Note { "PLUGINS IN ABLETON LIVE", "Choose a virtual port. In Live's MIDI settings set Track to On for that input, then on each "
-                                                          "instrument track pick it under MIDI From, with the track's channel, and set Monitor to In." },
+        const Note virtualNote = windowsHelp
+            ? Note { "PLUGINS IN ABLETON LIVE ON WINDOWS",
+                     "Windows has no virtual MIDI ports of its own. Install loopMIDI and add a port: it appears in the lists above. Assign it, then in Live's MIDI "
+                     "settings set Track to On for its input only. On each instrument track pick it under MIDI From, with the track's channel, and set Monitor to In." }
+            : Note { "PLUGINS IN ABLETON LIVE",
+                     "Choose a virtual port. In Live's MIDI settings set Track to On for that input, then on each instrument track pick it under MIDI From, "
+                     "with the track's channel, and set Monitor to In." };
+        for (auto n : { Note { "HARDWARE", "Assign the ports of your MIDI interface above, then choose Port and Channel on each track. "
+                                           "A port marked UNAVAILABLE is held by another program: switch it off in Live's Output Ports." },
+                        virtualNote,
                         Note { "HOST", "Live merges the plugin's output onto one channel. Use it for a single receiving track, such as a Drum Rack." } })
         {
             g.setColour (c::ink);
             g.setFont (bold (11.0f, 0.06f));
-            g.drawText (n.head, r.removeFromTop (17), juce::Justification::left);
-            g.setFont (medium (13.0f));
-            g.drawFittedText (n.body, r.removeFromTop (38), juce::Justification::topLeft, 2, 1.0f);
-            r.removeFromTop (6);
+            g.drawText (n.head, r.removeFromTop (16), juce::Justification::left);
+            g.setFont (medium (12.5f));
+            const int lines = juce::jmin (3, 1 + (int) juce::GlyphArrangement::getStringWidth (medium (12.5f), n.body) / (getWidth() - 8));
+            g.drawFittedText (n.body, r.removeFromTop (lines * 16 + 2), juce::Justification::topLeft, lines, 1.0f);
+            r.removeFromTop (5);
         }
     }
 
@@ -1217,5 +1242,281 @@ private:
     juce::OwnedArray<juce::ComboBox> boxes;
     juce::StringArray deviceIds;
     juce::TextButton rescan;
+    juce::MidiDeviceListConnection deviceWatcher;
+   #if JUCE_WINDOWS
+    bool windowsHelp = true;
+   #else
+    bool windowsHelp = false;
+   #endif
+};
+
+/** A number you drag, with its value drawn on the bar. */
+class NumberBox : public juce::Slider
+{
+public:
+    NumberBox (int lo, int hi, juce::String unitText = {}) : unit (std::move (unitText))
+    {
+        setSliderStyle (juce::Slider::LinearBar);
+        setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        setRange (lo, hi, 1.0);
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        g.setFont (pixel (10.0f));
+        g.setColour (isEnabled() ? c::ink : c::ink.withAlpha (0.3f));
+        g.drawText (juce::String ((int) getValue()) + unit, getLocalBounds(), juce::Justification::centred);
+    }
+
+private:
+    juce::String unit;
+};
+
+/** Chooses a parameter: Global, then one submenu per track. Shows the parameter's name. */
+class TargetBox : public juce::ComboBox
+{
+public:
+    static constexpr int kGlobals = 10;      // the global parameters come first, then kNumP for each track
+    std::function<void (int)> onPick;        // parameter index, -1 = none
+
+    explicit TargetBox (SeggProcessor& p) : proc (p) { setTextWhenNothingSelected ("Choose a parameter"); }
+
+    void showPopup() override
+    {
+        const auto& params = proc.getParameters();
+        juce::PopupMenu menu, globals;
+        menu.addItem (1, "None");
+        for (int i = 0; i < kGlobals; ++i) globals.addItem (i + 2, params[i]->getName (64));
+        menu.addSubMenu ("Global", globals);
+        for (int t = 0; t < kNumTracks; ++t)
+        {
+            juce::PopupMenu sub;
+            const juce::String prefix = "T" + juce::String (t + 1) + " ";
+            for (int k = 0; k < kNumP; ++k)
+            {
+                const int index = kGlobals + t * kNumP + k;
+                sub.addItem (index + 2, params[index]->getName (64).fromFirstOccurrenceOf (prefix, false, false));
+            }
+            menu.addSubMenu ("Track " + juce::String (t + 1), sub);
+        }
+        juce::Component::SafePointer<TargetBox> self (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self] (int r) {
+            if (self != nullptr && r > 0 && self->onPick) self->onPick (r - 2);
+        });
+    }
+
+    void show (int param)
+    {
+        if (param == shown) return;
+        shown = param;
+        if (auto* prm = proc.getParameters()[param]) setText (prm->getName (64), juce::dontSendNotification);
+        else setText ({}, juce::dontSendNotification);
+    }
+
+private:
+    SeggProcessor& proc;
+    int shown = -2;
+};
+
+/** The internal MIDI map. INPUT: notes, CC and pitch wheel move parameters. OUTPUT: tracks send CC and pitch wheel. */
+class MidiMapPage : public juce::Component
+{
+public:
+    explicit MidiMapPage (SeggProcessor& p) : proc (p)
+    {
+        for (auto* b : { &inputTab, &outputTab })
+        {
+            b->setClickingTogglesState (true);
+            b->setRadioGroupId (2);
+            addAndMakeVisible (b);
+            b->onClick = [this] { showRows(); };
+        }
+        inputTab.setButtonText ("INPUT");
+        outputTab.setButtonText ("OUTPUT");
+        inputTab.setToggleState (true, juce::dontSendNotification);
+
+        juce::StringArray types, modes, chans ("Any"), tracks, sources, dests;
+        for (auto* s : kInTypeNames) types.add (s);
+        for (auto* s : kInModeNames) modes.add (s);
+        for (int i = 1; i <= 16; ++i) chans.add (juce::String (i));
+        for (int i = 1; i <= kNumTracks; ++i) tracks.add ("T" + juce::String (i));
+        for (auto* s : kOutSourceNames) sources.add (s);
+        for (auto* s : kOutDestNames) dests.add (s);
+
+        for (int i = 0; i < kNumMapRows; ++i)
+        {
+            auto* in = inRows.add (new InRow (proc));
+            auto& model = proc.inMap[(size_t) i];
+            in->type.addItemList (types, 1);
+            in->channel.addItemList (chans, 1);
+            in->mode.addItemList (modes, 1);
+            in->learn.setButtonText ("LEARN");
+            in->type.onChange = [&model, r = in] { model.type = r->type.getSelectedItemIndex(); };
+            in->channel.onChange = [&model, r = in] { model.channel = r->channel.getSelectedItemIndex(); };
+            in->mode.onChange = [&model, r = in] { model.mode = r->mode.getSelectedItemIndex(); };
+            in->number.onValueChange = [&model, r = in] { model.number = (int) r->number.getValue(); };
+            in->lo.onValueChange = [&model, r = in] { model.lo = (int) r->lo.getValue(); };
+            in->hi.onValueChange = [&model, r = in] { model.hi = (int) r->hi.getValue(); };
+            in->target.onPick = [this, i, &model] (int param) { if (param < 0) proc.clearMapRow (i); else model.param = param; };
+            in->learn.onClick = [this, i] { proc.learnRow.store (proc.learnRow.load() == i ? -1 : i); };
+            for (auto* comp : in->all()) addChildComponent (comp);
+
+            auto* out = outRows.add (new OutRow());
+            auto& row = proc.engine.outMap[(size_t) i];
+            out->track.addItemList (tracks, 1);
+            out->source.addItemList (sources, 1);
+            out->dest.addItemList (dests, 1);
+            out->track.onChange = [&row, r = out] { row.track = r->track.getSelectedItemIndex(); };
+            out->source.onChange = [&row, r = out] { row.source = r->source.getSelectedItemIndex(); };
+            out->dest.onChange = [&row, r = out] { row.dest = r->dest.getSelectedItemIndex(); };
+            out->number.onValueChange = [&row, r = out] { row.number = (int) r->number.getValue(); };
+            out->lo.onValueChange = [&row, r = out] { row.lo = (int) r->lo.getValue(); };
+            out->hi.onValueChange = [&row, r = out] { row.hi = (int) r->hi.getValue(); };
+            out->slew.onValueChange = [&row, r = out] { row.slewMs = (int) r->slew.getValue(); };
+            for (auto* comp : out->all()) addChildComponent (comp);
+        }
+        showRows();
+        sync();
+    }
+
+    bool showingOutput() const { return outputTab.getToggleState(); }
+    void showOutput (bool on) { (on ? outputTab : inputTab).setToggleState (true, juce::dontSendNotification); showRows(); sync(); }
+
+    /** Brings the widgets in line with the tables: Learn, presets and sessions change them from outside. */
+    void sync()
+    {
+        const int learning = proc.learnRow.load();
+        for (int i = 0; i < kNumMapRows; ++i)
+        {
+            auto& in = *inRows[i];
+            const auto& m = proc.inMap[(size_t) i];
+            const int type = m.type.load();
+            in.type.setSelectedItemIndex (type, juce::dontSendNotification);
+            in.channel.setSelectedItemIndex (m.channel.load(), juce::dontSendNotification);
+            in.mode.setSelectedItemIndex (m.mode.load(), juce::dontSendNotification);
+            setIfIdle (in.number, m.number.load());
+            setIfIdle (in.lo, m.lo.load());
+            setIfIdle (in.hi, m.hi.load());
+            in.number.setEnabled (type != InPitch);
+            in.target.show (m.param.load());
+            in.learn.setButtonText (learning == i ? "WAIT" : "LEARN");
+            in.learn.setToggleState (learning == i, juce::dontSendNotification);
+
+            auto& out = *outRows[i];
+            const auto& o = proc.engine.outMap[(size_t) i];
+            out.track.setSelectedItemIndex (o.track.load(), juce::dontSendNotification);
+            out.source.setSelectedItemIndex (o.source.load(), juce::dontSendNotification);
+            out.dest.setSelectedItemIndex (o.dest.load(), juce::dontSendNotification);
+            setIfIdle (out.number, o.number.load());
+            setIfIdle (out.lo, o.lo.load());
+            setIfIdle (out.hi, o.hi.load());
+            setIfIdle (out.slew, o.slewMs.load());
+            out.number.setEnabled (o.dest.load() == DestCC);
+        }
+        for (int i = 0; i < kNumMapRows; ++i)
+        {
+            const auto h = proc.inMap[(size_t) i].hits.load (std::memory_order_relaxed);
+            flash[(size_t) i] = h != seen[(size_t) i] ? 1.0f : flash[(size_t) i] * 0.6f;
+            seen[(size_t) i] = h;
+        }
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (c::ink);
+        g.setFont (bold (11.0f, 0.06f));
+        const bool out = showingOutput();
+        struct Head { const char* text; int x; };
+        if (! out)
+            for (auto h : { Head { "SOURCE", kX }, Head { "CH", kX + 96 }, Head { "NUMBER", kX + 160 }, Head { "PARAMETER", kX + 222 }, Head { "MIN", kX + 462 },
+                            Head { "MAX", kX + 516 }, Head { "MODE", kX + 570 } })
+                g.drawText (h.text, h.x, kRowY - 18, 100, 14, juce::Justification::left);
+        else
+            for (auto h : { Head { "TRACK", kX }, Head { "SIGNAL", kX + 76 }, Head { "SENDS", kX + 196 }, Head { "CC", kX + 316 }, Head { "MIN", kX + 380 },
+                            Head { "MAX", kX + 442 }, Head { "SLEW", kX + 504 }, Head { "VALUE", kX + 586 } })
+                g.drawText (h.text, h.x, kRowY - 18, 100, 14, juce::Justification::left);
+
+        for (int i = 0; i < kNumMapRows; ++i)
+        {
+            const int y = kRowY + i * kRowH;
+            g.setFont (black (12.0f));
+            g.setColour (c::ink);
+            g.drawText (juce::String (i + 1), 0, y, 22, 22, juce::Justification::centredLeft);
+            if (! out)
+            {
+                g.setColour (c::go.withAlpha (juce::jlimit (0.12f, 1.0f, flash[(size_t) i])));
+                g.fillEllipse (juce::Rectangle<float> (9, 9).withCentre ({ 28.0f, (float) y + 11 }));
+            }
+            else
+            {
+                const auto& o = proc.engine.outMap[(size_t) i];
+                if (o.dest.load() == DestOff) continue;
+                auto bar = juce::Rectangle<float> ((float) kX + 586, (float) y + 7, 150, 8);
+                g.setColour (c::track);
+                g.fillRoundedRectangle (bar, 3.0f);
+                g.setColour (c::accent);
+                g.fillRoundedRectangle (bar.withWidth (juce::jlimit (2.0f, bar.getWidth(), bar.getWidth() * o.live.load (std::memory_order_relaxed))), 3.0f);
+                g.setColour (c::ink);
+                g.fillRect (bar.getCentreX(), bar.getY() - 2, 1.0f, o.dest.load() == DestPitch ? bar.getHeight() + 4 : 0.0f);
+            }
+        }
+    }
+
+    void resized() override
+    {
+        inputTab.setBounds (getWidth() - 200, 0, 98, 30);
+        outputTab.setBounds (getWidth() - 102, 0, 98, 30);
+        for (int i = 0; i < kNumMapRows; ++i)
+        {
+            const int y = kRowY + i * kRowH, h = 22;
+            auto& in = *inRows[i];
+            in.type.setBounds (kX, y, 90, h);          in.channel.setBounds (kX + 96, y, 58, h);
+            in.number.setBounds (kX + 160, y, 56, h);  in.target.setBounds (kX + 222, y, 234, h);
+            in.lo.setBounds (kX + 462, y, 48, h);      in.hi.setBounds (kX + 516, y, 48, h);
+            in.mode.setBounds (kX + 570, y, 92, h);    in.learn.setBounds (kX + 670, y - 2, 86, h + 4);
+            auto& out = *outRows[i];
+            out.track.setBounds (kX, y, 70, h);        out.source.setBounds (kX + 76, y, 114, h);
+            out.dest.setBounds (kX + 196, y, 114, h);  out.number.setBounds (kX + 316, y, 58, h);
+            out.lo.setBounds (kX + 380, y, 56, h);     out.hi.setBounds (kX + 442, y, 56, h);
+            out.slew.setBounds (kX + 504, y, 76, h);
+        }
+    }
+
+private:
+    static constexpr int kX = 40, kRowY = 58, kRowH = 25;
+
+    struct InRow
+    {
+        explicit InRow (SeggProcessor& p) : target (p) {}
+        juce::ComboBox type, channel, mode;
+        NumberBox number { 0, 127 }, lo { 0, 100, "%" }, hi { 0, 100, "%" };
+        TargetBox target;
+        juce::TextButton learn;
+        std::vector<juce::Component*> all() { return { &type, &channel, &number, &target, &lo, &hi, &mode, &learn }; }
+    };
+    struct OutRow
+    {
+        juce::ComboBox track, source, dest;
+        NumberBox number { 0, 127 }, lo { 0, 100, "%" }, hi { 0, 100, "%" }, slew { 0, 5000, " MS" };
+        std::vector<juce::Component*> all() { return { &track, &source, &dest, &number, &lo, &hi, &slew }; }
+    };
+
+    static void setIfIdle (juce::Slider& s, int v) { if (! s.isMouseButtonDown()) s.setValue (v, juce::dontSendNotification); }
+
+    void showRows()
+    {
+        const bool out = showingOutput();
+        for (auto* r : inRows)  for (auto* comp : r->all()) comp->setVisible (! out);
+        for (auto* r : outRows) for (auto* comp : r->all()) comp->setVisible (out);
+        repaint();
+    }
+
+    SeggProcessor& proc;
+    juce::TextButton inputTab, outputTab;
+    juce::OwnedArray<InRow> inRows;
+    juce::OwnedArray<OutRow> outRows;
+    std::array<int, kNumMapRows> seen {};
+    std::array<float, kNumMapRows> flash {};
 };
 } // namespace segg

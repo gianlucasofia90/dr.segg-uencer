@@ -1,7 +1,8 @@
 // DR. SEGG-UENCER headless tests: drive the processor with a fake host transport and check the MIDI it plays.
 // Run:  DrSeggUencerTests                        -> unit tests (exit code 1 on failure)
 //       DrSeggUencerTests --snap file track [page] [preset] [scale] -> render the editor to a PNG, track 1-16,
-//                                     page 0 = tracks, 1 = routing, 10+ = step lane; scale = window size (1 = 1280 x 800)
+//                                     page 0 = tracks, 1 = routing, 2 = MIDI map input, 3 = MIDI map output,
+//                                     4 = routing with the Windows help, 10+ = step lane; scale = window size (1 = 1280 x 800)
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SeggProcessor.h"
 #include "SeggEditor.h"
@@ -76,7 +77,7 @@ struct Rig
                 const auto msg = m.getMessage();
                 if (msg.isNoteOn()) ev.push_back ({ clock + m.samplePosition, 0x90, msg.getChannel(), msg.getNoteNumber(), msg.getVelocity() });
                 else if (msg.isNoteOff()) ev.push_back ({ clock + m.samplePosition, 0x80, msg.getChannel(), msg.getNoteNumber(), 0 });
-                else ev.push_back ({ clock + m.samplePosition, msg.getRawData()[0] & 0xf0, msg.getChannel(), msg.getRawData()[1], 0 });
+                else ev.push_back ({ clock + m.samplePosition, msg.getRawData()[0] & 0xf0, msg.getChannel(), msg.getRawData()[1], m.numBytes > 2 ? msg.getRawData()[2] : 0 });
             }
             clock += block;
             if (head.playing) head.ppq += block * head.bpm / (60.0 * sr);
@@ -680,6 +681,227 @@ static void testDirectPorts()
     CHECK (worst < 30.0, "a steady pulse stays steady through the dispatch thread");   // loose: CI machines are busy
 }
 
+static void feed (Rig& r, std::initializer_list<juce::MidiMessage> messages)
+{
+    juce::AudioBuffer<float> buf (2, r.block);
+    juce::MidiBuffer midi;
+    int pos = 0;
+    for (auto& m : messages) midi.addEvent (m, pos++);
+    r.p.processBlock (buf, midi);
+    r.p.pumpMidiMap();
+}
+
+static void testInputMap()
+{
+    Rig r;
+    auto& row = r.p.inMap[0];
+    auto index = [&] (const juce::String& id) { return r.p.state.getParameter (id)->getParameterIndex(); };
+
+    row.param = index ("gchaos"); row.type = InCC; row.number = 21;
+    feed (r, { juce::MidiMessage::controllerEvent (3, 21, 127) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gchaos")->load() - 100.0f) < 0.1f, "a CC moves a parameter");
+    feed (r, { juce::MidiMessage::controllerEvent (3, 22, 0) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gchaos")->load() - 100.0f) < 0.1f, "another CC does not");
+
+    row.lo = 20; row.hi = 60;
+    feed (r, { juce::MidiMessage::controllerEvent (3, 21, 0) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gchaos")->load() - 20.0f) < 0.1f, "Min scales the range");
+    row.lo = 80; row.hi = 0;
+    feed (r, { juce::MidiMessage::controllerEvent (3, 21, 127) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gchaos")->load()) < 0.1f, "Min above Max inverts it");
+
+    row.lo = 0; row.hi = 100; row.channel = 5;
+    feed (r, { juce::MidiMessage::controllerEvent (3, 21, 127) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gchaos")->load()) < 0.1f, "a row set to one channel ignores the others");
+    row.clear();
+
+    // pitch wheel, full 14 bits
+    auto& wheel = r.p.inMap[1];
+    wheel.param = index ("gdensity"); wheel.type = InPitch;
+    feed (r, { juce::MidiMessage::pitchWheel (1, 16383) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gdensity")->load() - 200.0f) < 0.1f, "pitch wheel up");
+    feed (r, { juce::MidiMessage::pitchWheel (1, 8192) });
+    CHECK (std::abs (r.p.state.getRawParameterValue ("gdensity")->load() - 100.0f) < 0.1f, "pitch wheel centre");
+    wheel.clear();
+
+    // a note as a switch, and as a gate
+    auto& key = r.p.inMap[2];
+    key.param = index (SeggProcessor::tid (5, pOn)); key.type = InNote; key.number = 40; key.mode = ModeToggle;
+    feed (r, { juce::MidiMessage::noteOn (1, 40, (juce::uint8) 100), juce::MidiMessage::noteOff (1, 40) });
+    CHECK (r.p.ti (5, pOn) == 1, "Toggle: a note switches a track on");
+    feed (r, { juce::MidiMessage::noteOn (1, 40, (juce::uint8) 100), juce::MidiMessage::noteOff (1, 40) });
+    CHECK (r.p.ti (5, pOn) == 0, "Toggle: the next note switches it off");
+    key.mode = ModeAbsolute;
+    feed (r, { juce::MidiMessage::noteOn (1, 40, (juce::uint8) 100) });
+    CHECK (r.p.ti (5, pOn) == 1, "Absolute: on while the note is held");
+    feed (r, { juce::MidiMessage::noteOff (1, 40) });
+    CHECK (r.p.ti (5, pOn) == 0, "Absolute: off when it is released");
+
+    // a mapped note must not also transpose
+    r.set ("gkeyin", 1);
+    feed (r, { juce::MidiMessage::noteOn (1, 40, (juce::uint8) 100) });
+    CHECK (r.p.engine.global.keyTranspose == 0, "a mapped note does not transpose");
+    feed (r, { juce::MidiMessage::noteOn (1, 62, (juce::uint8) 100) });
+    feed (r, {});
+    CHECK (r.p.engine.global.keyTranspose == 2, "an unmapped note still does");
+    r.set ("gkeyin", 0);
+    key.clear();
+
+    // CC button as a toggle
+    auto& button = r.p.inMap[3];
+    button.param = index (SeggProcessor::tid (6, pOn)); button.type = InCC; button.number = 64; button.mode = ModeToggle;
+    feed (r, { juce::MidiMessage::controllerEvent (1, 64, 127), juce::MidiMessage::controllerEvent (1, 64, 0) });
+    CHECK (r.p.ti (6, pOn) == 1, "CC button: one press, one flip");
+    feed (r, { juce::MidiMessage::controllerEvent (1, 64, 127), juce::MidiMessage::controllerEvent (1, 64, 127), juce::MidiMessage::controllerEvent (1, 64, 0) });
+    CHECK (r.p.ti (6, pOn) == 0, "CC button: a repeated value does not flip twice");
+    button.clear();
+
+    // learn
+    const auto id = SeggProcessor::tid (2, pMutate);
+    const int learned = r.p.startLearn (id);
+    CHECK (learned == 0 && r.p.learnRow.load() == 0, "Learn takes the first free row");
+    feed (r, { juce::MidiMessage::noteOff (2, 50), juce::MidiMessage::controllerEvent (9, 74, 127) });
+    CHECK (r.p.learnRow.load() == -1 && r.p.inMap[0].type.load() == InCC && r.p.inMap[0].number.load() == 74 && r.p.inMap[0].channel.load() == 9, "Learn ignores note-offs and takes the CC");
+    feed (r, { juce::MidiMessage::controllerEvent (9, 74, 127) });
+    CHECK (std::abs (r.p.tf (2, pMutate) - 100.0f) < 0.1f, "the learned CC works");
+    CHECK (r.p.startLearn (id) == 0, "learning a mapped parameter reuses its row");
+    feed (r, { juce::MidiMessage::pitchWheel (4, 0) });
+    CHECK (r.p.inMap[0].type.load() == InPitch, "Learn takes the pitch wheel");
+    r.p.startLearn (SeggProcessor::tid (3, pGate));
+    feed (r, { juce::MidiMessage::noteOn (1, 36, (juce::uint8) 90) });
+    CHECK (r.p.inMap[1].type.load() == InNote && r.p.inMap[1].mode.load() == ModeToggle, "Learn takes a note, as a switch");
+
+    // the map stays with the session, and out of presets
+    juce::MemoryBlock session;
+    r.p.getStateInformation (session);
+    Rig b;
+    b.p.setStateInformation (session.getData(), (int) session.getSize());
+    CHECK (b.p.inMap[1].type.load() == InNote && b.p.inMap[1].number.load() == 36 && b.p.inMap[1].param.load() == index (SeggProcessor::tid (3, pGate)), "input map survives save and reload");
+    b.p.presets.load (3);
+    CHECK (b.p.inMap[1].type.load() == InNote, "loading a preset keeps the controllers");
+    r.p.clearMapRow (0);
+    CHECK (r.p.inMap[0].param.load() == -1, "a row can be cleared");
+}
+
+static void testOutputMap()
+{
+    auto cc = [] (const Rig& r, int number) { std::vector<Ev> out; for (auto& e : r.ev) if (e.status == 0xB0 && e.note == number) out.push_back (e); return out; };
+
+    // velocity to CC, on every hit, just before the note
+    Rig r;
+    r.solo (0, Euclid);
+    r.set (0, pEsteps, 1); r.set (0, pEpulses, 1); r.set (0, pVel, 127); r.set (0, pVrand, 100); r.set (0, pCh, 4);
+    auto& row = r.p.engine.outMap[0];
+    row.track = 0; row.source = OutVelocity; row.number = 74; row.dest = DestCC;
+    r.run (2.0);
+    const auto msgs = cc (r, 74);
+    CHECK (msgs.size() >= 3 && msgs[0].ch == 4, "a track sends CC on its own channel");
+    bool before = true;
+    for (size_t i = 1; i < r.ev.size(); ++i)
+        if (r.ev[i].on() && r.ev[i - 1].status != 0xB0 && r.ev[i - 1].status != 0x80) before = false;
+    CHECK (before, "the CC arrives before its note");
+
+    // random: every value differs, notes unchanged by the mapping
+    Rig a, b;
+    for (Rig* x : { &a, &b })
+    {
+        x->solo (0, Turing);
+        x->set (0, pTknob, 50); x->set (0, pTdens, 100);
+    }
+    b.p.engine.outMap[3].track = 0; b.p.engine.outMap[3].source = OutRandom; b.p.engine.outMap[3].dest = DestCC; b.p.engine.outMap[3].number = 20;
+    a.run (8.0); b.run (8.0);
+    bool sameNotes = a.ons().size() == b.ons().size();
+    for (size_t i = 0; sameNotes && i < a.ons().size(); ++i) sameNotes = a.ons()[i].note == b.ons()[i].note && a.ons()[i].sample == b.ons()[i].sample;
+    CHECK (sameNotes, "mapping a track does not change its notes");
+    CHECK (cc (b, 20).size() > 20, "Random sends a new value on each hit");
+
+    // pitch wheel, then back to the centre on stop
+    Rig p;
+    p.solo (0, Step);
+    p.set (0, pSlen, 2); p.set (0, pScale, 1); p.set (0, pRate, 5);
+    p.p.engine.patterns[0].step[0].set (1, 12); p.p.engine.patterns[0].step[1].set (1, -12);
+    auto& bend = p.p.engine.outMap[1];
+    bend.track = 0; bend.source = OutNote; bend.dest = DestPitch;
+    juce::MidiBuffer midi; juce::AudioBuffer<float> buf (2, 512);
+    std::vector<int> values;
+    for (int i = 0; i < 100; ++i)
+    {
+        midi.clear();
+        p.p.processBlock (buf, midi);
+        p.head.ppq += 512 * 2.0 / 48000.0;
+        for (const auto m : midi) if ((m.data[0] & 0xf0) == 0xE0) values.push_back (m.data[1] | (m.data[2] << 7));
+    }
+    CHECK (std::find (values.begin(), values.end(), (int) std::lround (0.75 * 16383)) != values.end()
+           && std::find (values.begin(), values.end(), (int) std::lround (0.25 * 16383)) != values.end(), "pitch wheel follows the notes, 14 bits, 48 semitones full scale");
+    p.head.playing = false;
+    midi.clear();
+    p.p.processBlock (buf, midi);
+    int last = -1;
+    for (const auto m : midi) if ((m.data[0] & 0xf0) == 0xE0) last = m.data[1] | (m.data[2] << 7);
+    CHECK (last == 8192, "stopping brings the pitch wheel back to the centre");
+
+    // slew glides and stays under the rate cap
+    Rig s;
+    s.solo (0, Step);
+    s.set (0, pSlen, 2); s.set (0, pRate, 3); s.set (0, pScale, 1);
+    s.p.engine.patterns[0].step[0].set (1, 24); s.p.engine.patterns[0].step[1].set (1, -24);
+    auto& g = s.p.engine.outMap[2];
+    g.track = 0; g.source = OutNote; g.dest = DestCC; g.number = 1; g.slewMs = 300;
+    s.run (16.0);
+    const auto glide = cc (s, 1);
+    std::set<int> levels;
+    for (auto& e : glide) levels.insert (e.vel);
+    CHECK (levels.size() > 20, "Slew sends a glide, not a jump");
+    double seconds = 8.0;
+    CHECK ((double) glide.size() / seconds < 210.0, "one row stays under 200 messages per second");
+
+    // position signals move by themselves, also for tracks with Notes off
+    Rig m;
+    m.solo (0, Physics);
+    m.set (0, pNotes, 0); m.set (0, pPspeed, 80);
+    auto& motion = m.p.engine.outMap[0];
+    motion.track = 0; motion.source = OutPosX; motion.dest = DestCC; motion.number = 10;
+    m.run (16.0);
+    CHECK (m.ons().empty() && cc (m, 10).size() > 50, "a track with Notes off can be only a modulator");
+
+    // gate
+    Rig ga;
+    ga.solo (0, Euclid);
+    ga.set (0, pRate, 5); ga.set (0, pEsteps, 1); ga.set (0, pEpulses, 1); ga.set (0, pGate, 50);
+    auto& gr = ga.p.engine.outMap[0];
+    gr.track = 0; gr.source = OutGate; gr.dest = DestCC; gr.number = 11;
+    ga.run (4.0);
+    std::set<int> gateValues;
+    for (auto& e : cc (ga, 11)) gateValues.insert (e.vel);
+    CHECK (gateValues.count (127) == 1 && gateValues.count (0) == 1, "Gate sends high while the note is held, low after");
+
+    // the output map is part of the music: it travels in presets and sessions
+    Rig c;
+    c.p.engine.outMap[5].track = 7; c.p.engine.outMap[5].source = OutPosY; c.p.engine.outMap[5].dest = DestPitch; c.p.engine.outMap[5].slewMs = 250;
+    c.p.presets.save ("__segg_map_test");
+    Rig d;
+    d.p.presets.refresh();
+    d.p.presets.load (d.p.presets.getNames().indexOf ("__segg_map_test"));
+    CHECK (d.p.engine.outMap[5].track.load() == 7 && d.p.engine.outMap[5].dest.load() == DestPitch && d.p.engine.outMap[5].slewMs.load() == 250, "user presets carry the output map");
+    c.p.presets.removeCurrent();
+    d.p.presets.load (0);
+    CHECK (d.p.engine.outMap[5].dest.load() == DestOff, "Init clears the output map");
+    juce::MemoryBlock session;
+    c.p.getStateInformation (session);
+    Rig e;
+    e.p.setStateInformation (session.getData(), (int) session.getSize());
+    CHECK (e.p.engine.outMap[5].source.load() == OutPosY, "sessions carry the output map");
+
+    // the demo preset
+    Rig l;
+    l.p.presets.load (l.p.presets.getNames().indexOf ("Factory / CC Lanes"));
+    l.run (16.0);
+    int ccCount = 0, bends = 0;
+    for (auto& ev : l.ev) { if (ev.status == 0xB0) ++ccCount; if (ev.status == 0xE0) ++bends; }
+    CHECK (ccCount > 100, "CC Lanes sends its lanes");
+    std::printf ("  CC Lanes: %d CC, %d other, %d notes in 8 s\n", ccCount, bends, (int) l.ons().size());
+}
+
 static void testSpeed()
 {
     Rig r (32);
@@ -723,6 +945,8 @@ int main (int argc, char** argv)
     testPresets();
     testRouting();
     testDirectPorts();
+    testInputMap();
+    testOutputMap();
     testSpeed();
     std::printf ("%d checks passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
@@ -739,7 +963,15 @@ static void runSnap (const juce::String& path, int track, int page, int preset, 
         if (auto* oe = dynamic_cast<SeggEditor*> (ed.get()))
         {
             oe->selectTrack (track - 1);
-            oe->showRouting (page == 1);
+            if (page == 1 || page == 4) oe->showRouting (true);
+            if (page == 4) oe->setWindowsHelp (true);
+            if (page == 2 || page == 3)
+            {
+                r.p.inMap[0].param = 15; r.p.inMap[0].type = InCC; r.p.inMap[0].number = 74;
+                r.p.inMap[1].param = 4; r.p.inMap[1].type = InPitch;
+                r.p.inMap[2].param = 10; r.p.inMap[2].type = InNote; r.p.inMap[2].number = 36; r.p.inMap[2].mode = ModeToggle;
+                oe->showMidiMap (true, page == 3);
+            }
             if (page >= 10) oe->setLaneForSnapshot (page - 10);
             oe->tickForSnapshot();
         }

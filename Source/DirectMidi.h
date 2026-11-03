@@ -26,10 +26,18 @@ public:
     /** Message thread. Empty id closes the slot. Returns false if the port could not be opened. */
     bool setSlot (int slot, const juce::String& id)
     {
+        {   // close first: a virtual port cannot be created twice under the same name
+            const juce::ScopedLock sl (outputLock);
+            live[(size_t) slot].store (false);
+            outputs[(size_t) slot].reset();
+        }
         std::unique_ptr<juce::MidiOutput> device;
        #if ! JUCE_WINDOWS   // Windows has no virtual MIDI ports of its own
         if (id == virtualId())
-            device = juce::MidiOutput::createNewDevice (virtualName (slot));
+        {   // a second instance of the plugin gets its own port next to the first
+            for (auto* suffix : { "", " B", " C", " D" })
+                if (device == nullptr) device = juce::MidiOutput::createNewDevice (virtualName (slot) + suffix);
+        }
         else
        #endif
         if (id.isNotEmpty() && id != virtualId())
@@ -55,6 +63,8 @@ public:
 
     juce::String getSlot (int slot) const { return ids[(size_t) slot]; }
     bool isSlotLive (int slot) const noexcept { return live[(size_t) slot].load (std::memory_order_relaxed); }
+    /** Assigned but not open: the device is gone, or another program holds it. */
+    bool isSlotFailed (int slot) const noexcept { return ids[(size_t) slot].isNotEmpty() && ! isSlotLive (slot); }
 
     /** Audio thread. dueMs is on the juce::Time::getMillisecondCounterHiRes clock. */
     void push (int slot, double dueMs, int status, int d1, int d2) noexcept
