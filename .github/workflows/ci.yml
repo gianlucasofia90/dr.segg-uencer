@@ -106,12 +106,8 @@ jobs:
           mkdir -p pkgroot/Library/Audio/Plug-Ins/VST3 pkgroot/Library/Audio/Plug-Ins/Components
           ditto "$A/VST3/DR. SEGG-UENCER.vst3" "pkgroot/Library/Audio/Plug-Ins/VST3/DR. SEGG-UENCER.vst3"
           ditto "$A/AU/DR. SEGG-UENCER.component" "pkgroot/Library/Audio/Plug-Ins/Components/DR. SEGG-UENCER.component"
-          pkgbuild --analyze --root pkgroot components.plist
-          # always to the folders above: VST3 and AU share a bundle id, and the installer must not move them
-          n=$(/usr/libexec/PlistBuddy -c "Print" components.plist | grep -c RootRelativeBundlePath)
-          for i in $(seq 0 $((n - 1))); do /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" components.plist; done
           VERSION=$(sed -n 's/^project(DrSeggUencer VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          pkgbuild --root pkgroot --component-plist components.plist --identifier com.gianlucasofia.drsegguencer.pkg \
+          pkgbuild --root pkgroot --component-plist scripts/pkg-components.plist --identifier com.gianlucasofia.drsegguencer.pkg \
             --version "$VERSION" --install-location / "dist/DrSeggUencer-$TAG-macOS-Installer.pkg"
       - name: Test the installer
         run: |
