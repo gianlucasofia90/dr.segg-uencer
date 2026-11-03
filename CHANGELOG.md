@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.4] - 2026-11-03
+- macOS: nuovo installer `.pkg` con VST3 e AU. Basta approvare il pacchetto una volta, e i plugin installati non restano bloccati da Gatekeeper.
+- macOS: corretta la versione minima del sistema. Le build CI richiedevano macOS 14.5 invece di macOS 11.
+- La CI verifica firma ad hoc, versione minima e installer a ogni build.
+
 ## [0.1.3] - 2026-11-03
 - **MIDI MAP**, nuova pagina con due tabelle da 16 righe.
 - Input: note, CC e pitch wheel muovono qualsiasi parametro, con Min, Max, Absolute o Toggle. MIDI Learn dal tasto della riga o con clic destro su un controllo.
