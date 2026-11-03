@@ -1,6 +1,6 @@
 # DR. SEGG-UENCER
 
-Multi-sequencer MIDI a 16 tracce simultanee in formato **VST3 / AU / AAX** (C++ / JUCE 8), pensato per Ableton Live, per pilotare strumenti hardware e plugin. È il compagno di [SONIC GRAIN](https://github.com/gianlucasofia90/SONICGRAIN): stessa grafica, stessa toolchain.
+Multi-sequencer MIDI a 16 tracce simultanee in formato **VST3 / AU / AAX** (C++ / JUCE 8), pensato per Ableton Live, per pilotare strumenti hardware e plugin. È il compagno di [SONIC GRAIN](https://github.com/gianlucasofia90/SONICGRAIN): stessa famiglia grafica (tema Egg Lab), stessa toolchain.
 
 Il suono di riferimento è quello di *Incunabula* e *Amber* degli Autechre e di *Selected Ambient Works 85-92* di Aphex Twin: pattern di lunghezze diverse che si spostano l'uno sull'altro, mutazioni piccole e lente, macchine che si influenzano a vicenda.
 
@@ -91,6 +91,9 @@ cmake --build build --config Release
 ```
 - I plugin vengono copiati nelle cartelle plug-in dell'utente (si disattiva con `-DDRSEGG_COPY_AFTER_BUILD=OFF`).
 - **Mac senza Terminale**: doppio clic su `scripts/build-mac.command`, poi `scripts/verify-au.command` per auval.
+
+### Pubblicare una versione
+Doppio clic su `scripts/release.bat` (Windows) o `scripts/release.command` (macOS): aggiorna la versione in `CMakeLists.txt`, aggiunge la voce nel CHANGELOG se manca, fa push e crea il tag `vX.Y.Z`. La CI pubblica la Release. Per un'altra versione: `release.bat -Version 0.1.2` oppure `release.command 0.1.2`.
 
 ### Test
 ```bash

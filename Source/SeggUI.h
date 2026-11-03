@@ -1,6 +1,6 @@
 #pragma once
-// DR. SEGG-UENCER UI parts. Same design language as SONIC GRAIN: glass panels on a blue ground, slanted black plates,
-// dark knobs with a yellow value arc, pixel-font readouts.
+// DR. SEGG-UENCER UI parts. SONIC GRAIN design language (glass panels, slanted black plates, dark knobs with a
+// yellow value arc, pixel-font readouts) with the Egg Lab ground: lab red, a diagonal slab, hazard stripes.
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SeggProcessor.h"
@@ -10,10 +10,13 @@ namespace segg
 {
 namespace c
 {
-    const juce::Colour ground    { 0xff1784e8 };
-    const juce::Colour groundAlt { 0xff31aac6 };
-    const juce::Colour modGround { 0xff0f7a3c };
-    const juce::Colour glass     { 0xccecf8ff };   // rgba(236, 248, 255, 0.80)
+    // Egg Lab: only the ground layer differs from SONIC GRAIN, every other name keeps its value
+    const juce::Colour ground    { 0xffc8102e };   // lab red, white on it 5.9:1
+    const juce::Colour groundAlt { 0xff7d0a1c };   // header strip
+    const juce::Colour slab      { 0xffa00d25 };   // diagonal band behind the right side
+    const juce::Colour modGround { 0xff17191d };   // track deck
+    const juce::Colour glass     { 0xf5f6f7fa };   // rgba(246, 247, 250, 0.96): almost opaque, no pink cast over red
+    const juce::Colour panelShadow { 0x523c000a };
     const juce::Colour glassEdge { 0xe6ffffff };
     const juce::Colour ink       { 0xff0b1430 };
     const juce::Colour inkSoft   { 0xff33415f };
@@ -24,15 +27,15 @@ namespace c
     const juce::Colour go        { 0xff1f9e1a };
     const juce::Colour signal    { 0xffe90101 };
     const juce::Colour tag       { 0xff0123c0 };
-    const juce::Colour orbitA    { 0xfff77129 };
-    const juce::Colour orbitB    { 0xff52dba5 };
+    const juce::Colour orbitA    { 0xffffd21f };   // yellow ring
+    const juce::Colour orbitB    { 0xffe8ecf1 };   // chrome ring
     const juce::Colour knob      { 0xff16212f };
     const juce::Colour knobHi    { 0xff3a4b63 };
     const juce::Colour track     { 0x240b1430 };   // ink at 14 %
     const juce::Colour trackDark { 0x24ffffff };   // white at 14 %, for controls on plates and the deck
-    const juce::Colour display   { 0xe0082660 };   // rgba(8, 38, 96, 0.88)
+    const juce::Colour display   { 0xeb082660 };   // rgba(8, 38, 96, 0.92)
     const juce::Colour wave      { 0xffffffff };
-    const juce::Colour checker   { 0x1affffff };
+    const juce::Colour checker   { 0x21000000 };   // black 13 % on the red ground
     const juce::Colour grid      { 0x2effffff };
 }
 
@@ -78,12 +81,29 @@ inline void taggedPlate (juce::Graphics& g, juce::Rectangle<float> r, juce::Colo
     g.setColour (fill);      g.fillPath (platePath (r));
 }
 
+/** Hazard stripes (accent on plate, 45 degrees): the edge of the header and of the track deck. */
+inline void hazard (juce::Graphics& g, juce::Rectangle<float> r, float band = 10.0f)
+{
+    juce::Graphics::ScopedSaveState save (g);
+    g.reduceClipRegion (r.getSmallestIntegerContainer());
+    g.setColour (c::plate);
+    g.fillRect (r);
+    g.setColour (c::accent);
+    const float h = r.getHeight();
+    for (float x = r.getX() - h; x < r.getRight(); x += band * 2.0f)
+    {
+        juce::Path p;
+        p.addQuadrilateral (x, r.getBottom(), x + band, r.getBottom(), x + band + h, r.getY(), x + h, r.getY());
+        g.fillPath (p);
+    }
+}
+
 /** Glass panel with its two-line title: kicker word, then the section word on a tagged plate. */
 inline void glassPanel (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& kicker, const juce::String& title)
 {
     juce::Path body;
     body.addRoundedRectangle (r, 10.0f);
-    juce::DropShadow (juce::Colour (0x47041e5a), 24, { 0, 10 }).drawForPath (g, body);
+    juce::DropShadow (c::panelShadow, 28, { 0, 12 }).drawForPath (g, body);
     g.setColour (c::glass);
     g.fillPath (body);
     g.setColour (c::glassEdge);
@@ -123,7 +143,7 @@ public:
         setColour (juce::Label::textColourId, c::ink);
         setColour (juce::ComboBox::textColourId, c::ink);
         setColour (juce::ComboBox::arrowColourId, c::ink);
-        setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xffecf8ff));
+        setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xfff6f7fa));
         setColour (juce::PopupMenu::textColourId, c::ink);
         setColour (juce::PopupMenu::highlightedBackgroundColourId, c::plate);
         setColour (juce::PopupMenu::highlightedTextColourId, c::onPlate);
@@ -131,7 +151,7 @@ public:
         setColour (juce::TextButton::buttonOnColourId, c::accent);
         setColour (juce::TextButton::textColourOffId, c::onPlate);
         setColour (juce::TextButton::textColourOnId, c::onAccent);
-        setColour (juce::AlertWindow::backgroundColourId, juce::Colour (0xffecf8ff));
+        setColour (juce::AlertWindow::backgroundColourId, juce::Colour (0xfff6f7fa));
         setColour (juce::AlertWindow::textColourId, c::ink);
         setColour (juce::AlertWindow::outlineColourId, c::plate);
         setColour (juce::TextEditor::backgroundColourId, juce::Colours::white);
@@ -286,9 +306,11 @@ public:
     {
         auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
         const bool dark = isOnDark (box);
-        g.setColour (dark ? juce::Colour (0x47000000) : c::track);
+        g.setColour (dark ? juce::Colour (0x14ffffff) : juce::Colours::white);
         g.fillRoundedRectangle (r, 4.0f);
-        if (box.isMouseOver (true)) { g.setColour (dark ? c::onPlate.withAlpha (0.6f) : c::inkSoft); g.drawRoundedRectangle (r, 4.0f, 1.0f); }
+        const bool over = box.isMouseOver (true);
+        g.setColour (dark ? c::onPlate.withAlpha (over ? 0.6f : 0.2f) : (over ? c::inkSoft : c::ink.withAlpha (0.18f)));
+        g.drawRoundedRectangle (r, 4.0f, 1.0f);
         if (w < 62) return;
         juce::Path chev;
         const float ax = (float) w - 11.0f, ay = h * 0.5f;
@@ -416,26 +438,21 @@ inline void displayWell (juce::Graphics& g, juce::Rectangle<float> r)
 {
     g.setColour (c::display);
     g.fillRoundedRectangle (r, 6.0f);
-    g.setColour (c::glassEdge.withAlpha (0.35f));
+    g.setColour (c::plate);                                   // black cockpit bezel
+    g.drawRoundedRectangle (r.reduced (3.0f), 4.0f, 6.0f);
+    g.setColour (c::onPlate.withAlpha (0.12f));
+    g.drawRoundedRectangle (r.reduced (6.5f), 3.0f, 1.0f);
+    g.setColour (c::onPlate.withAlpha (0.18f));
     g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
 }
 
-inline juce::Colour typeColour (int type)
-{
-    switch (type)
-    {
-        case Euclid:    return c::accent;
-        case Step:      return c::orbitA;
-        case Turing:    return c::orbitB;
-        case Cartesian: return juce::Colour (0xff6fd3ff);
-        default:        return juce::Colour (0xffff7ab8);
-    }
-}
+/** One colour, one meaning: a hit is accent whatever the sequencer. The type is named in words (EUC, STP ...). */
+inline juce::Colour typeColour (int) { return c::accent; }
 
 inline juce::String routeText (int port, int ch) { return (port == 0 ? juce::String ("HOST") : "P" + juce::String (port)) + " " + juce::String (ch); }
 
 /** Small live picture of a track, used in the track list and on the type tabs. */
-inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangle<float> r, juce::Colour col)
+inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangle<float> r, juce::Colour col, juce::Colour empty = c::trackDark)
 {
     const int type = p.ti (t, pType);
     const auto& u = p.engine.ui[(size_t) t];
@@ -453,7 +470,7 @@ inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangl
             {
                 auto b = juce::Rectangle<float> (r.getX() + (float) i * w, r.getY() + 2, juce::jmax (1.5f, w - 1.5f), r.getHeight() - 4);
                 const bool hit = euclidHit (pmod (i - rot, n), k, n);
-                g.setColour (playing && i == pos ? c::signal : (hit ? col : c::trackDark));
+                g.setColour (playing && i == pos ? c::signal : (hit ? col : empty));
                 g.fillRect (hit || (playing && i == pos) ? b : b.withTrimmedTop (b.getHeight() - 2));
             }
             break;
@@ -469,7 +486,7 @@ inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangl
                 const float v = 0.5f + (float) cell.pitch.load (std::memory_order_relaxed) / 48.0f;
                 const float bh = juce::jlimit (2.0f, r.getHeight(), r.getHeight() * v);
                 auto b = juce::Rectangle<float> (r.getX() + (float) i * w, r.getBottom() - bh, w - 1.5f, bh);
-                g.setColour (playing && i == pos ? c::signal : (cell.on.load (std::memory_order_relaxed) != 0 ? col : c::trackDark));
+                g.setColour (playing && i == pos ? c::signal : (cell.on.load (std::memory_order_relaxed) != 0 ? col : empty));
                 g.fillRect (b);
             }
             break;
@@ -481,7 +498,7 @@ inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangl
             const float w = juce::jmin (r.getWidth() / (float) n, 8.0f);
             for (int i = 0; i < n; ++i)
             {
-                g.setColour (((reg >> i) & 1u) != 0 ? col : c::trackDark);
+                g.setColour (((reg >> i) & 1u) != 0 ? col : empty);
                 g.fillRect (r.getX() + (float) i * w, r.getY() + 4, w - 1.5f, r.getHeight() - 8);
             }
             break;
@@ -495,14 +512,14 @@ inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangl
                 for (int x = 0; x < 4; ++x)
                 {
                     const bool here = playing && x == cx && y == cy;
-                    g.setColour (here ? c::signal : (cells[(size_t) (y * 4 + x)].on.load (std::memory_order_relaxed) != 0 ? col : c::trackDark));
+                    g.setColour (here ? c::signal : (cells[(size_t) (y * 4 + x)].on.load (std::memory_order_relaxed) != 0 ? col : empty));
                     g.fillRect (r.getX() + (float) x * s * 1.6f, r.getY() + (float) y * s, s * 1.6f - 1.0f, s - 1.0f);
                 }
             break;
         }
         default:
         {
-            g.setColour (c::trackDark);
+            g.setColour (empty);
             g.drawRect (r, 1.0f);
             const int n = juce::jlimit (1, kMaxBalls, p.ti (t, pPcount));
             g.setColour (col);
@@ -518,7 +535,7 @@ inline void drawMini (juce::Graphics& g, SeggProcessor& p, int t, juce::Rectangl
 class TrackList : public juce::Component
 {
 public:
-    static constexpr int kRowH = 40, kLedW = 56;
+    static constexpr int kRowH = 34, kLedW = 56;
     std::function<void (int)> onSelect;
 
     explicit TrackList (SeggProcessor& p) : proc (p) {}
@@ -539,38 +556,40 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        static const char* tags[kNumTypes] = { "EUC", "STP", "TUR", "CAR", "PHY" };
         for (int t = 0; t < kNumTracks; ++t)
         {
-            auto r = juce::Rectangle<float> (0, (float) (t * kRowH), (float) getWidth(), (float) kRowH - 3);
+            auto r = juce::Rectangle<float> (0, (float) (t * kRowH), (float) getWidth() - 4, (float) kRowH - 5);
             const bool on = proc.ti (t, pOn) != 0, sel = t == selected;
             const int type = proc.ti (t, pType);
-            const auto col = typeColour (type);
-            g.setColour (sel ? c::plate : c::display.withAlpha (on ? 0.92f : 0.45f));
-            g.fillRoundedRectangle (r, 5.0f);
-            if (sel) { g.setColour (c::accent); g.drawRoundedRectangle (r.reduced (0.75f), 5.0f, 1.5f); }
+            // selected: accent with a signal offset; live: black plate; off: a faint well on the glass
+            if (sel) { g.setColour (c::signal); g.fillRoundedRectangle (r.translated (3, 3), 4.0f); }
+            g.setColour (sel ? c::accent : (on ? c::plate : c::ink.withAlpha (0.08f)));
+            g.fillRoundedRectangle (r, 4.0f);
+            const auto text  = sel ? c::onAccent : (on ? c::onPlate : c::inkSoft);
+            const auto hit   = sel ? c::onAccent : (on ? c::accent : c::ink.withAlpha (0.26f));
+            const auto empty = sel ? c::ink.withAlpha (0.25f) : (on ? c::trackDark : c::ink.withAlpha (0.12f));
 
-            g.setColour (on ? c::onPlate : c::onPlate.withAlpha (0.45f));
-            g.setFont (black (15.0f));
-            g.drawText (juce::String (t + 1), juce::Rectangle<float> (6, r.getY(), 26, r.getHeight()), juce::Justification::centred);
+            g.setColour (text);
+            g.setFont (black (14.0f));
+            g.drawText (juce::String (t + 1), juce::Rectangle<float> (4, r.getY(), 26, r.getHeight()), juce::Justification::centred);
 
             // on/off LED, brighter on every note
-            auto led = juce::Rectangle<float> (13, 13).withCentre ({ 42, r.getCentreY() });
+            auto led = juce::Rectangle<float> (11, 11).withCentre ({ 42, r.getCentreY() });
             const float fl = flash[(size_t) t];
-            g.setColour (on ? c::go.interpolatedWith (c::accent, fl) : c::onPlate.withAlpha (0.14f));
+            g.setColour (on ? c::go.interpolatedWith (c::accent, fl) : c::ink.withAlpha (0.2f));
             g.fillEllipse (led);
-            g.setColour (c::onPlate.withAlpha (on ? 0.8f : 0.3f));
-            g.drawEllipse (led, 1.0f);
+            if (on) { g.setColour (sel ? c::onAccent : c::onPlate.withAlpha (0.85f)); g.drawEllipse (led.expanded (1.0f), 1.5f); }
 
             g.setFont (pixel (10.0f));
-            g.setColour (on ? col : c::onPlate.withAlpha (0.4f));
-            static const char* tags[kNumTypes] = { "EUC", "STP", "TUR", "CAR", "PHY" };
+            g.setColour (sel ? c::onAccent : (on ? c::accent : c::inkSoft));
             g.drawText (tags[juce::jlimit (0, kNumTypes - 1, type)], juce::Rectangle<float> (56, r.getY(), 32, r.getHeight()), juce::Justification::centredLeft);
 
-            auto mini = juce::Rectangle<float> (90, r.getY() + 6, (float) getWidth() - 90 - 70, r.getHeight() - 12);
-            drawMini (g, proc, t, mini, on ? col : col.withAlpha (0.3f));
+            auto mini = juce::Rectangle<float> (90, r.getY() + 5, r.getWidth() - 90 - 66, r.getHeight() - 10);
+            drawMini (g, proc, t, mini, hit, empty);
 
-            g.setColour (on ? c::onPlate : c::onPlate.withAlpha (0.4f));
-            g.drawText (routeText (proc.ti (t, pPort), proc.ti (t, pCh)), juce::Rectangle<float> ((float) getWidth() - 66, r.getY(), 60, r.getHeight()),
+            g.setColour (sel ? c::onAccent : (on ? c::onPlate.withAlpha (0.8f) : c::inkSoft));
+            g.drawText (routeText (proc.ti (t, pPort), proc.ti (t, pCh)), juce::Rectangle<float> (r.getRight() - 66, r.getY(), 58, r.getHeight()),
                         juce::Justification::centredRight);
         }
     }
@@ -749,8 +768,8 @@ private:
             const float alpha = active ? 1.0f : 0.3f;
             if (playing && i == pos && ! compact)
             {
-                g.setColour (c::signal.withAlpha (0.3f));
-                g.fillRect (x, gates.getY(), w - 2, r.getBottom() - gates.getY());
+                g.setColour (c::signal);
+                g.drawRoundedRectangle (juce::Rectangle<float> (x - 2, gates.getY() - 3, w + 2, r.getBottom() - gates.getY() + 6), 3.0f, 2.0f);
             }
             auto pad = juce::Rectangle<float> (x, gates.getY(), w - 2, gates.getHeight());
             g.setColour ((on ? col : c::trackDark).withMultipliedAlpha (alpha));
@@ -869,6 +888,17 @@ private:
         g.setColour (c::onPlate);
         g.setFont (black (34.0f));
         g.drawText (juce::String (k) + "/" + juce::String (n), juce::Rectangle<float> (140, 44).withCentre (ctr), juce::Justification::centred);
+        g.setFont (pixel (10.0f));
+        if (playing)
+            g.drawText ("STEP " + juce::String (pos + 1).paddedLeft ('0', 2), juce::Rectangle<float> (140, 14).withCentre (ctr.translated (0, 28)),
+                        juce::Justification::centred);
+        if (mel <= 1)
+        {   // corner readouts, clear of the RND and CLR buttons that only show with MELODY
+            auto in = r.reduced (18.0f, 14.0f);
+            g.drawText ("LEN " + juce::String (n) + "  ROT " + juce::String (rot), in.removeFromTop (14), juce::Justification::left);
+            g.setColour (c::accent);
+            g.drawText ("ACC " + juce::String (acc), in.withHeight (14), juce::Justification::right);
+        }
     }
 
     void paintTuring (juce::Graphics& g, juce::Rectangle<float> r)
@@ -890,15 +920,19 @@ private:
             g.fillRect (b);
             if (i < 8) { g.setColour (c::onPlate.withAlpha (0.7f)); g.drawRect (b, 1.0f); }   // the bits that make the pitch
         }
+        g.setColour (c::signal);       // write head: bit 0
+        g.drawEllipse (juce::Rectangle<float> (24, 24).withCentre ({ ctr.x, ctr.y - rad }), 2.0f);
         const float k = proc.tf (track, pTknob);
-        const char* state = k >= 99.5f ? "LOCKED" : (k <= 0.5f ? "LOCKED x2" : (std::abs (k - 50.0f) < 6.0f ? "RANDOM" : "SLIPPING"));
+        const char* state = k >= 99.5f ? "LOCKED" : (k <= 0.5f ? "LOCKED X2" : (std::abs (k - 50.0f) < 6.0f ? "RANDOM" : "SLIPPING"));
         g.setColour (c::onPlate);
-        g.setFont (black (24.0f));
-        g.drawText (state, juce::Rectangle<float> (rad * 1.6f, 34).withCentre (ctr.translated (0, -12)), juce::Justification::centred);
+        g.setFont (black (34.0f));
+        g.drawText (juce::String (juce::roundToInt (k)) + " %", juce::Rectangle<float> (rad * 1.6f, 40).withCentre (ctr.translated (0, -16)), juce::Justification::centred);
         g.setFont (pixel (10.0f));
+        g.drawText ("LOCK  " + juce::String (state), juce::Rectangle<float> (rad * 1.7f, 14).withCentre (ctr.translated (0, 8)), juce::Justification::centred);
         const int note = proc.engine.ui[(size_t) track].lastNote.load (std::memory_order_relaxed);
         const auto noteText = note >= 0 ? juce::String (kNoteNames[note % 12]) + juce::String (note / 12 - 2) : juce::String ("--");
-        g.drawText ("LENGTH " + juce::String (n) + "  NOTE " + noteText, juce::Rectangle<float> (rad * 1.7f, 16).withCentre (ctr.translated (0, 18)), juce::Justification::centred);
+        g.setColour (c::onPlate.withAlpha (0.85f));
+        g.drawText ("LENGTH " + juce::String (n) + "  NOTE " + noteText, juce::Rectangle<float> (rad * 1.7f, 14).withCentre (ctr.translated (0, 26)), juce::Justification::centred);
 
         // the notes that came out, newest on the right
         g.setColour (c::trackDark);
@@ -908,9 +942,9 @@ private:
         const int span = juce::jmax (12, hi - lo);
         const int size = (int) history.size();
         const float w = plot.getWidth() / (float) size;
-        g.setColour (col);
         for (int i = 0; i < size; ++i)
         {
+            g.setColour (i == size - 1 ? c::signal : col);
             const int v = history[(size_t) pmod (histCount - size + i, size)];
             if (v < 0) continue;
             g.fillRect (plot.getX() + (float) i * w, plot.getBottom() - 8 - (float) (v - lo) / (float) span * (plot.getHeight() - 12), juce::jmax (2.0f, w - 1), 4.0f);
@@ -947,18 +981,27 @@ private:
             auto& cell = cells[(size_t) i];
             const bool on = cell.on.load() != 0, inside = i % 4 < w && i / 4 < h;
             const bool here = playing && i == cy * 4 + cx;
-            g.setColour (here ? c::signal : (on && inside ? col.withAlpha (0.85f) : c::trackDark));
-            g.fillRoundedRectangle (b, 5.0f);
-            if (! inside) continue;
+            if (! inside) { g.setColour (c::onPlate.withAlpha (0.05f)); g.fillRoundedRectangle (b, 4.0f); continue; }
             if (! on)
-            {   // denied: a cross, so the state does not rest on colour alone
-                g.setColour (c::onPlate.withAlpha (0.35f));
-                g.drawLine (b.getX() + 14, b.getY() + 14, b.getRight() - 14, b.getBottom() - 14, 1.5f);
-                g.drawLine (b.getRight() - 14, b.getY() + 14, b.getX() + 14, b.getBottom() - 14, 1.5f);
+            {   // denied: hatched and labelled, so the state does not rest on colour alone
+                juce::Graphics::ScopedSaveState save (g);
+                juce::Path clip; clip.addRoundedRectangle (b, 4.0f);
+                g.reduceClipRegion (clip);
+                g.setColour (c::onPlate.withAlpha (0.10f));
+                for (float x = b.getX() - b.getHeight(); x < b.getRight(); x += 12.0f)
+                    g.drawLine (x, b.getBottom(), x + b.getHeight(), b.getY(), 5.0f);
+                g.setColour (c::onPlate.withAlpha (here ? 0.9f : 0.25f));
+                g.drawRoundedRectangle (b.reduced (0.5f), 4.0f, here ? 2.0f : 1.0f);
+                g.setColour (c::onPlate.withAlpha (0.7f));
+                g.setFont (pixel (10.0f));
+                g.drawText ("DENIED", b.reduced (8, 6), juce::Justification::topLeft);
                 continue;
             }
+            g.setColour (here ? col : c::onPlate.withAlpha (0.12f));
+            g.fillRoundedRectangle (b, 4.0f);
+            if (here) { g.setColour (c::signal); g.drawRoundedRectangle (b.expanded (1.0f), 5.0f, 2.0f); }
             const int v = cell.pitch.load();
-            g.setColour (here ? c::onPlate : c::onAccent);
+            g.setColour (here ? c::onAccent : c::onPlate);
             g.setFont (bold (14.0f));
             g.drawText ((v > 0 ? "+" : "") + juce::String (v), b.reduced (8, 6), juce::Justification::topLeft);
         }
@@ -968,11 +1011,14 @@ private:
             juce::Path path;
             for (int i = 0; i < kNumCells; ++i)
             {
-                const auto q = padBounds (kPaths[set][(size_t) i]).getCentre().translated (8, 8);
+                const auto q = padBounds (kPaths[set][(size_t) i]).getCentre();
                 if (i == 0) path.startNewSubPath (q); else path.lineTo (q);
             }
-            g.setColour (c::ink.withAlpha (0.8f));
-            g.strokePath (path, juce::PathStrokeType (2.0f));
+            juce::Path dashed;
+            const float dash[] = { 4.0f, 4.0f };
+            juce::PathStrokeType (1.5f).createDashedStroke (dashed, path, dash, 2);
+            g.setColour (c::onPlate.withAlpha (0.5f));
+            g.fillPath (dashed);
         }
         g.setColour (c::onPlate);
         g.setFont (pixel (10.0f));
@@ -986,10 +1032,10 @@ private:
         auto area = r.reduced (16.0f);
         const float side = juce::jmin (area.getWidth(), area.getHeight());
         auto box = juce::Rectangle<float> (side, side).withCentre (area.getCentre());
-        const auto col = typeColour (Physics);
-        g.setColour (c::checker);
+        const auto col = c::wave;
+        g.setColour (c::onPlate.withAlpha (0.04f));
         g.fillRect (box);
-        g.setColour (c::onPlate.interpolatedWith (col, flash));
+        g.setColour (c::onPlate.withAlpha (0.6f).interpolatedWith (c::accent, flash));
         g.drawRect (box, 1.0f + 2.5f * flash);
         const int n = juce::jlimit (1, kMaxBalls, proc.ti (track, pPcount));
         const float rad = (0.02f + proc.tf (track, pPsize) * 0.0013f) * side;
@@ -1125,9 +1171,9 @@ public:
         for (int i = 0; i < kNumSlots; ++i)
         {
             const auto box = boxes[i]->getBounds();
-            g.setFont (bold (11.0f, 0.06f));
+            g.setFont (black (13.0f));
             g.setColour (c::ink);
-            g.drawText (juce::String (i + 1), box.getX() - 44, box.getY(), 20, 22, juce::Justification::centredLeft);
+            g.drawText (juce::String (i + 1), box.getX() - 44, box.getY(), 24, 22, juce::Justification::centredLeft);
             auto led = juce::Rectangle<float> (10, 10).withCentre ({ (float) box.getX() - 14, (float) box.getY() + 11 });
             g.setColour (proc.direct.isSlotLive (i) ? c::go : c::inkSoft.withAlpha (0.3f));
             g.fillEllipse (led);
