@@ -27,9 +27,12 @@ public:
     bool setSlot (int slot, const juce::String& id)
     {
         std::unique_ptr<juce::MidiOutput> device;
+       #if ! JUCE_WINDOWS   // Windows has no virtual MIDI ports of its own
         if (id == virtualId())
             device = juce::MidiOutput::createNewDevice (virtualName (slot));
-        else if (id.isNotEmpty())
+        else
+       #endif
+        if (id.isNotEmpty() && id != virtualId())
             device = juce::MidiOutput::openDevice (id);
         const bool ok = id.isEmpty() || device != nullptr;
         {
