@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SeggEngine.h"
 #include "DirectMidi.h"
+#include "PortMemory.h"
 #include "Presets.h"
 
 class SeggProcessor : public juce::AudioProcessor, private juce::Timer
@@ -72,6 +73,10 @@ public:
 
     void panic() { panicRequested.store (true); }
     void setPortSlot (int slot, const juce::String& deviceId);
+    /** Message thread. The user picks a port in ROUTING: it applies here and becomes the machine's last configuration. */
+    void assignPort (int slot, const juce::String& deviceId);
+    /** Message thread. A new instance takes the last configuration; an instance restored from a session keeps its own. */
+    void restoreLastPorts();
 
     juce::AudioProcessorValueTreeState state;
     segg::PresetManager presets;
@@ -97,7 +102,11 @@ private:
     void inMapFromTree (const juce::ValueTree&);
     juce::ValueTree outMapToTree() const;
     void outMapFromTree (const juce::ValueTree&);
-    void timerCallback() override { pumpMidiMap(); }
+    void timerCallback() override
+    {
+        pumpMidiMap();
+        if (portsPending.load() && portsReady.load()) restoreLastPorts();
+    }
     void handleLearn (int status, int d1, int d2) noexcept;
 
     std::array<std::array<std::atomic<float>*, segg::kNumP>, segg::kNumTracks> trackPtr {};
@@ -107,6 +116,8 @@ private:
     bool internalRunning = false;
     int heldKey = -1;
     std::atomic<bool> panicRequested { false };
+    // the host restores a session after building the plugin, so opening ports must wait for the first prepareToPlay
+    std::atomic<bool> portsPending { true }, portsReady { false };
     struct MapValue { int param; float norm; };
     juce::AbstractFifo mapFifo { 1024 };
     std::array<MapValue, 1024> mapValues {};

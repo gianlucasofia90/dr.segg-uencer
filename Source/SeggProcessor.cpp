@@ -137,6 +137,7 @@ void SeggProcessor::prepareToPlay (double sampleRate, int)
     pullParams();
     engine.prepare (sampleRate);
     internalRunning = false;
+    portsReady.store (true);
 }
 
 void SeggProcessor::pullParams() noexcept
@@ -356,6 +357,24 @@ void SeggProcessor::setPortSlot (int slot, const juce::String& deviceId)
     if (direct.getSlot (slot) != deviceId) direct.setSlot (slot, deviceId);
 }
 
+void SeggProcessor::assignPort (int slot, const juce::String& deviceId)
+{
+    portsPending.store (false);
+    setPortSlot (slot, deviceId);
+    PortIds ids;
+    for (int i = 0; i < kNumSlots; ++i) ids[(size_t) i] = direct.getSlot (i);
+    PortMemory::save (ids, juce::MidiOutput::getAvailableDevices());
+}
+
+void SeggProcessor::restoreLastPorts()
+{
+    if (! portsPending.exchange (false)) return;
+    PortChoices last;
+    if (! PortMemory::load (last)) return;
+    const auto ids = PortMemory::match (last, juce::MidiOutput::getAvailableDevices());
+    for (int i = 0; i < kNumSlots; ++i) setPortSlot (i, ids[(size_t) i]);
+}
+
 juce::ValueTree SeggProcessor::inMapToTree() const
 {
     juce::ValueTree tree ("INMAP");
@@ -457,7 +476,8 @@ void SeggProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     if (auto xml = createPresetXml())
     {
-        xml->addChildElement (portsToTree().createXml().release());
+        if (! portsPending.load())      // before the ports are settled there is nothing to save: the state stays "new"
+            xml->addChildElement (portsToTree().createXml().release());
         xml->addChildElement (inMapToTree().createXml().release());    // controllers, like ports, stay out of presets
         xml->setAttribute ("presetIndex", presets.getCurrent());
         xml->setAttribute ("uiScale", (double) uiScale.load());
@@ -471,7 +491,11 @@ void SeggProcessor::setStateInformation (const void* data, int size)
     {
         if (applyPresetXml (*xml))
         {
-            if (auto* ports = xml->getChildByName ("PORTS")) portsFromTree (juce::ValueTree::fromXml (*ports));
+            if (auto* ports = xml->getChildByName ("PORTS"))
+            {
+                portsPending.store (false);
+                portsFromTree (juce::ValueTree::fromXml (*ports));
+            }
             if (auto* map = xml->getChildByName ("INMAP")) inMapFromTree (juce::ValueTree::fromXml (*map));
             presets.markCurrent (xml->getIntAttribute ("presetIndex", 0));
             uiScale = (float) juce::jlimit (0.6, 2.0, xml->getDoubleAttribute ("uiScale", 1.0));
@@ -479,7 +503,11 @@ void SeggProcessor::setStateInformation (const void* data, int size)
     }
 }
 
-juce::AudioProcessorEditor* SeggProcessor::createEditor() { return new SeggEditor (*this); }
+juce::AudioProcessorEditor* SeggProcessor::createEditor()
+{
+    restoreLastPorts();     // ROUTING must show the real ports, even in a host that opens the window before it plays
+    return new SeggEditor (*this);
+}
 
 #ifndef SEGG_NO_PLUGIN_ENTRY
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new SeggProcessor(); }

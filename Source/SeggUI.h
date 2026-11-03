@@ -1142,7 +1142,7 @@ public:
             addAndMakeVisible (box);
             box->onChange = [this, i] {
                 const int id = boxes[i]->getSelectedId();
-                proc.setPortSlot (i, id == 1 ? juce::String() : (id == 2 ? DirectMidi::virtualId() : deviceIds[id - 3]));
+                proc.assignPort (i, id == 1 ? juce::String() : (id == 2 ? DirectMidi::virtualId() : deviceIds[id - 3]));
                 repaint();
             };
         }

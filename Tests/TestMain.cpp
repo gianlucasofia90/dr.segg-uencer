@@ -683,6 +683,126 @@ static void testDirectPorts()
         CHECK (worst < 30.0, "a steady pulse stays steady through the dispatch thread");
 }
 
+static void testPortMemory()
+{
+    using Devices = juce::Array<juce::MidiDeviceInfo>;
+    auto slots = [] (SeggProcessor& p) { PortIds ids; for (int i = 0; i < kNumSlots; ++i) ids[(size_t) i] = p.direct.getSlot (i); return ids; };
+
+    PortMemory::file().deleteFile();
+    {   // nothing configured yet
+        SeggProcessor p;
+        p.restoreLastPorts();
+        CHECK (slots (p) == PortIds {}, "with no memory a new instance has no ports");
+    }
+
+    juce::MemoryBlock emptySession, wiredSession;
+    {   // this build has no MIDI devices, so the ports show as unavailable, but the assignment is what is under test
+        SeggProcessor p;
+        p.restoreLastPorts();
+        p.getStateInformation (emptySession);
+        p.assignPort (0, "device-a");
+        p.assignPort (3, DirectMidi::virtualId());
+        p.assignPort (15, "device-b");
+        p.assignPort (15, {});
+        p.assignPort (7, "device-c");
+        p.getStateInformation (wiredSession);
+    }
+    CHECK (PortMemory::file().existsAsFile(), "a choice in ROUTING is written to disk");
+    {
+        SeggProcessor p;
+        CHECK (slots (p) == PortIds {}, "no port opens while the host may still restore a session");
+        p.restoreLastPorts();
+        CHECK (p.direct.getSlot (0) == "device-a" && p.direct.getSlot (3) == DirectMidi::virtualId() && p.direct.getSlot (7) == "device-c",
+               "a new instance starts from the last configuration");
+        CHECK (p.direct.getSlot (15).isEmpty(), "the last change counts, also when it clears a port");
+        CHECK (p.direct.getSlot (1).isEmpty(), "a port never assigned stays free");
+    }
+    {   // a session, even one with no ports at all, is left as it was saved
+        SeggProcessor p;
+        p.setStateInformation (emptySession.getData(), (int) emptySession.getSize());
+        p.restoreLastPorts();
+        CHECK (slots (p) == PortIds {}, "a session saved with no ports stays with no ports");
+    }
+    {
+        SeggProcessor p;
+        p.getStateInformation (emptySession);       // host asks for state before anything is settled
+        p.setStateInformation (emptySession.getData(), (int) emptySession.getSize());
+        p.restoreLastPorts();
+        CHECK (p.direct.getSlot (0) == "device-a", "a state taken before the first play still counts as new");
+    }
+    {   // the session arrives after the host has already started the plugin
+        SeggProcessor p;
+        p.restoreLastPorts();
+        p.setStateInformation (emptySession.getData(), (int) emptySession.getSize());
+        p.setStateInformation (wiredSession.getData(), (int) wiredSession.getSize());
+        CHECK (p.direct.getSlot (7) == "device-c", "a late session replaces the memory");
+    }
+    {   // opening an old project is not a configuration: the memory does not move
+        SeggProcessor s;
+        s.restoreLastPorts();
+        s.assignPort (2, "device-z");
+        juce::MemoryBlock other;
+        s.getStateInformation (other);
+        s.assignPort (2, "device-y");
+        SeggProcessor reopened;
+        reopened.setStateInformation (other.getData(), (int) other.getSize());
+        SeggProcessor fresh;
+        fresh.restoreLastPorts();
+        CHECK (fresh.direct.getSlot (2) == "device-y", "restoring a session leaves the memory alone");
+    }
+    {   // presets carry no ports, and loading one does not touch them
+        SeggProcessor p;
+        p.restoreLastPorts();
+        p.presets.load (1);
+        CHECK (p.direct.getSlot (0) == "device-a", "a preset leaves the ports alone");
+    }
+
+    {   // the path a host really takes: the plugin's own timer, once the host has started it
+        SeggProcessor p;
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+        CHECK (p.direct.getSlot (0).isEmpty(), "before the first play the timer opens nothing");
+        p.prepareToPlay (48000.0, 512);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+        CHECK (p.direct.getSlot (0) == "device-a", "after the first play the timer brings the ports back");
+    }
+    {   // the first time on a machine the folder does not exist yet
+        const auto real = PortMemory::fileOverride();
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("segg-test-folder", "", false);
+        PortMemory::fileOverride() = folder.getChildFile ("deep").getChildFile ("ports.settings");
+        CHECK (PortMemory::save (PortIds { { "first" } }, {}), "the first save creates its folder");
+        PortChoices first;
+        CHECK (PortMemory::load (first) && first[0].id == "first", "the first save can be read back");
+        folder.deleteRecursively();
+        PortMemory::fileOverride() = real;
+    }
+
+    auto device = [] (const char* name, const char* id) { return juce::MidiDeviceInfo (name, id); };
+    PortIds ids;
+    ids[0] = "usb1"; ids[1] = DirectMidi::virtualId(); ids[2] = "usb3"; ids[3] = "usb4";
+    PortMemory::save (ids, Devices { device ("Interface 1", "usb1"), device ("Interface 3", "usb3") });
+    PortChoices saved;
+    CHECK (PortMemory::load (saved) && saved[0].name == "Interface 1" && saved[3].name.isEmpty(), "ids are stored with their names");
+
+    const auto moved = PortMemory::match (saved, Devices { device ("Interface 3", "usb3"), device ("Interface 1", "other-socket") });
+    CHECK (moved[0] == "other-socket", "a device with a new id is found by name");
+    CHECK (moved[1] == DirectMidi::virtualId() && moved[2] == "usb3", "virtual ports and known ids pass through");
+    CHECK (moved[3] == "usb4", "a device that is gone keeps its id, ready for when it returns");
+
+    PortMemory::save (ids, Devices { device ("Interface 3", "usb3") });
+    CHECK (PortMemory::load (saved) && saved[0].name == "Interface 1", "an unplugged device keeps its name in the memory");
+
+    ids = {};
+    ids[0] = "a"; ids[1] = "b";
+    PortMemory::save (ids, Devices { device ("Twin", "a"), device ("Twin", "b") });
+    PortMemory::load (saved);
+    const auto twins = PortMemory::match (saved, Devices { device ("Twin", "x"), device ("Twin", "y") });
+    CHECK (twins[0] == "x" && twins[1] == "y", "ports with the same name stay in order");
+
+    PortMemory::file().replaceWithText ("not a settings file");
+    CHECK (! PortMemory::load (saved), "a damaged file counts as no memory");
+    PortMemory::file().deleteFile();
+}
+
 static void feed (Rig& r, std::initializer_list<juce::MidiMessage> messages)
 {
     juce::AudioBuffer<float> buf (2, r.block);
@@ -924,6 +1044,9 @@ static void runSnap (const juce::String& path, int track, int page, int preset, 
 
 int main (int argc, char** argv)
 {
+    // never read or write the real file of the machine running the tests
+    PortMemory::fileOverride() = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                     .getNonexistentChildFile ("segg-test-ports", ".settings", false);
     if (argc > 1 && juce::String (argv[1]) == "--snap")
     {
         runSnap (argc > 2 ? juce::String (argv[2]) : juce::String ("snap_segg.png"), argc > 3 ? juce::String (argv[3]).getIntValue() : 1,
@@ -947,6 +1070,7 @@ int main (int argc, char** argv)
     testPresets();
     testRouting();
     testDirectPorts();
+    testPortMemory();
     testInputMap();
     testOutputMap();
     testSpeed();

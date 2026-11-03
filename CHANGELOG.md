@@ -1,5 +1,9 @@
 # Changelog
 
+## [Non pubblicato]
+- ROUTING ricorda l'ultima configurazione delle porte: una nuova istanza, in qualsiasi progetto, riparte da lì. I progetti salvati tornano sempre come sono stati salvati.
+- Se una porta ha cambiato identificativo, per esempio su un'altra presa USB, viene ritrovata per nome.
+
 ## [0.1.5] - 2026-11-03
 - Interfaccia molto più fluida: lo sfondo e i controlli fermi vengono conservati in immagine invece di essere ridisegnati a ogni fotogramma. Nelle misure il tempo di disegno scende da 100-180 ms a meno di 10 ms per fotogramma.
 - Lo stato della porta si ridisegna solo quando cambia.

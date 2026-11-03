@@ -65,6 +65,8 @@ Le note arrivano in Live come da un controller esterno, quindi si possono anche 
 
 Attenzione: la seconda tendina di `MIDI From`, quella con `Pre FX`, `Post FX` e `DR. SEGG-UENCER`, compare quando scegli una traccia e serve solo per l'uscita Host del punto 3.
 
+**Memoria delle porte.** Ogni scelta fatta in ROUTING diventa l'ultima configurazione della macchina: una nuova istanza, in qualsiasi progetto, riparte da lì, con le porte aperte alla prima riproduzione. Un progetto salvato torna invece sempre come l'hai salvato, e aprirlo non cambia la memoria. Se una porta è cambiata di presa USB viene ritrovata per nome; se non c'è, resta `UNAVAILABLE` finché non torna. Vale solo per l'assegnazione di `Port 1…16`: l'uscita di ogni traccia fa parte del preset e parte da `Host`. La memoria sta in `Last Ports.settings`, nella cartella `Dr Segg-uencer` dei dati utente.
+
 Se in ROUTING una porta è segnata `UNAVAILABLE`, la sta tenendo occupata un altro programma: su Windows succede se Live la usa già, quindi spegni la porta nelle **Porte di Uscita** di Live.
 
 **3. Una sola destinazione, uscita Host.** Tutte le tracce su `Host`; su una seconda traccia MIDI, `MIDI From` = traccia di DR. SEGG-UENCER, sotto `DR. SEGG-UENCER`, `Monitor` = `In`. Va bene per un Drum Rack, dove contano le note e non i canali. Funziona con il VST3, non con l'AU.
@@ -158,6 +160,7 @@ I test controllano temporizzazione al campione, poliritmi, i cinque sequencer, l
 | `Source/SeggCore.h` | tabelle (rate, scale, percorsi), parametri, celle dei pattern |
 | `Source/SeggEngine.h` | clock multitraccia, i cinque sequencer, link, note |
 | `Source/DirectMidi.h` | porte MIDI dirette e virtuali |
+| `Source/PortMemory.h` | ultima configurazione delle porte sulla macchina |
 | `Source/MidiMap.h` | tabelle della MIDI MAP |
 | `Source/SeggProcessor.*` | parametri, trasporto, stato, preset |
 | `Source/Presets.h` | interfaccia dei preset; le ricette sono in `SeggProcessor.cpp` |
