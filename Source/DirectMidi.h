@@ -40,7 +40,7 @@ public:
         }
         else
        #endif
-        if (id.isNotEmpty() && id != virtualId())
+        if (id.isNotEmpty() && id != virtualId() && deviceExists (id))
             device = juce::MidiOutput::openDevice (id);
         const bool ok = id.isEmpty() || device != nullptr;
         {
@@ -94,6 +94,13 @@ private:
     static constexpr int kFifoSize = 16384;
 
     void startRealtimeOrHigh() { startThread (juce::Thread::Priority::highest); }
+
+    /** On Windows openDevice falls back to the Microsoft synth for an id it does not know: a missing device would play there. */
+    static bool deviceExists (const juce::String& id)
+    {
+        for (auto& d : juce::MidiOutput::getAvailableDevices()) if (d.identifier == id) return true;
+        return false;
+    }
 
     void run() override
     {

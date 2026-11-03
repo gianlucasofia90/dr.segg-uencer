@@ -715,6 +715,7 @@ static void testPortMemory()
         CHECK (p.direct.getSlot (0) == "device-a" && p.direct.getSlot (3) == DirectMidi::virtualId() && p.direct.getSlot (7) == "device-c",
                "a new instance starts from the last configuration");
         CHECK (p.direct.getSlot (15).isEmpty(), "the last change counts, also when it clears a port");
+        CHECK (p.direct.isSlotFailed (0) && ! p.direct.isSlotLive (0), "a device that is not there stays unavailable");
         CHECK (p.direct.getSlot (1).isEmpty(), "a port never assigned stays free");
     }
     {   // a session, even one with no ports at all, is left as it was saved
@@ -762,7 +763,8 @@ static void testPortMemory()
         juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
         CHECK (p.direct.getSlot (0).isEmpty(), "before the first play the timer opens nothing");
         p.prepareToPlay (48000.0, 512);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+        for (int wait = 0; wait < 150 && p.direct.getSlot (0).isEmpty(); ++wait)     // shared CI machines can be slow
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
         CHECK (p.direct.getSlot (0) == "device-a", "after the first play the timer brings the ports back");
     }
     {   // the first time on a machine the folder does not exist yet
@@ -801,6 +803,7 @@ static void testPortMemory()
     PortMemory::file().replaceWithText ("not a settings file");
     CHECK (! PortMemory::load (saved), "a damaged file counts as no memory");
     PortMemory::file().deleteFile();
+    std::printf ("  port memory: done\n");
 }
 
 static void feed (Rig& r, std::initializer_list<juce::MidiMessage> messages)
@@ -1044,6 +1047,7 @@ static void runSnap (const juce::String& path, int track, int page, int preset, 
 
 int main (int argc, char** argv)
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);      // a crash in CI must not swallow what was printed before it
     // never read or write the real file of the machine running the tests
     PortMemory::fileOverride() = juce::File::getSpecialLocation (juce::File::tempDirectory)
                                      .getNonexistentChildFile ("segg-test-ports", ".settings", false);
