@@ -80,6 +80,16 @@ def disc(uid, cx, cy, R, kind):
         s.append(f'<defs><linearGradient id="g{uid}" x1="0.15" y1="0" x2="0.85" y2="1">'
                  f'<stop offset="0" stop-color="#ff5a3c"/><stop offset="0.45" stop-color="#c8102e"/><stop offset="1" stop-color="#5e0718"/></linearGradient></defs>')
         s.append(f'<circle cx="{CX}" cy="{CY}" r="240" fill="url(#g{uid})"/>')
+        s.append(f'<circle cx="{CX}" cy="{CY}" r="237.1" fill="none" stroke="{DEEP}" stroke-opacity="0.55" stroke-width="5.8"/>')
+        # ring like SONIC GRAIN: short arcs, yellow at the top fading to black at the bottom, symmetric
+        rr, n = 217.2, 120
+        for i in range(n):
+            a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1.4) / n
+            t = (1 - math.cos(2 * math.pi * (i + 0.5) / n)) / 2          # 0 top, 1 bottom
+            col = lerp(YOLK, "#d27a0c", t / 0.45) if t < 0.45 else lerp("#d27a0c", INK, (t - 0.45) / 0.55)   # through amber, not olive
+            p0 = (CX + rr * math.sin(a0), CY - rr * math.cos(a0))
+            p1 = (CX + rr * math.sin(a1), CY - rr * math.cos(a1))
+            s.append(f'<path d="M{p0[0]:.1f},{p0[1]:.1f} A{rr},{rr} 0 0 1 {p1[0]:.1f},{p1[1]:.1f}" fill="none" stroke="{col}" stroke-width="8.4"/>')
         pal = dict(bar=WHITE, accent=YOLK)
     else:
         s.append(f'<circle cx="{CX}" cy="{CY}" r="240" fill="{INK if kind == "ink" else WHITE}"/>')
