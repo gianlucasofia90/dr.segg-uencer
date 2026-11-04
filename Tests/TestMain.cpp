@@ -1202,6 +1202,44 @@ static void testCv()
     }
 }
 
+/** The deck has one NOTE control, and it is a menu on every page and for every sequencer type. */
+static void testNoteMenu()
+{
+    Rig r;
+    for (int type = 0; type < kNumTypes; ++type) r.set (type, pType, type);
+    std::unique_ptr<juce::AudioProcessorEditor> ed (r.p.createEditor());
+    auto* editor = dynamic_cast<SeggEditor*> (ed.get());
+    CHECK (editor != nullptr, "the editor opens");
+    if (editor == nullptr) return;
+
+    auto noteMenuShown = [editor] {
+        auto* ctl = editor->trackControl (pNote);
+        return ctl != nullptr && ctl->isVisible() && ctl->combo.isVisible() && ctl->combo.getNumItems() == 128 && ! ctl->slider.isVisible();
+    };
+    for (int type = 0; type < kNumTypes; ++type)
+    {
+        editor->selectTrack (type);
+        CHECK (noteMenuShown(), "every sequencer type has the NOTE menu");
+    }
+    editor->selectTrack (0);
+    editor->showRouting (true);
+    CHECK (noteMenuShown(), "ROUTING has the NOTE menu");
+    editor->showRouting (false);
+    editor->showMidiMap (true, false);
+    CHECK (noteMenuShown(), "MIDI MAP has the NOTE menu");
+    editor->showMidiMap (false, false);
+
+    // the menu drives the parameter, and the parameter drives the menu
+    editor->selectTrack (2);
+    auto& box = editor->trackControl (pNote)->combo;
+    box.setSelectedId (61 + 1, juce::sendNotificationSync);
+    CHECK (r.p.ti (2, pNote) == 61, "the NOTE menu sets the note of its track");
+    CHECK (r.p.ti (1, pNote) != 61, "the NOTE menu leaves the other tracks alone");
+    r.set (2, pNote, 36);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    CHECK (box.getText() == "C1", "the NOTE menu follows the parameter");
+}
+
 static void testSpeed()
 {
     Rig r (32);
@@ -1253,6 +1291,7 @@ int main (int argc, char** argv)
     testInputMap();
     testOutputMap();
     testCv();
+    testNoteMenu();
     testSpeed();
     std::printf ("%d checks passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;

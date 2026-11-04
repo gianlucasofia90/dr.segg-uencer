@@ -27,7 +27,7 @@ Ogni traccia può usare uno qualsiasi dei cinque tipi, e tutte le tracce suonano
 - **Gate** fino all'800 % del passo, **Velocity**, **Vel Rnd**, **Chance**.
 - **Roll**: probabilità di una raffica di `Roll Hits` colpi dentro il passo.
 - **Mutate**: variazioni piccole; il pattern si allontana e tende a tornare.
-- **Note**, **Scale** (Global, Chromatic per le note di batteria, o una delle 18 scale), **Chord** (accordi costruiti sulla scala).
+- **Note** (menu a tendina con le 128 note divise per ottava), **Scale** (Global, Chromatic per le note di batteria, o una delle 18 scale), **Chord** (accordi costruiti sulla scala).
 - **Seed**: stesso seed, stessa musica, anche in bounce offline e con qualsiasi buffer audio.
 
 ### Link tra tracce
@@ -72,8 +72,6 @@ Se in ROUTING una porta è segnata `UNAVAILABLE`, la sta tenendo occupata un alt
 **3. Una sola destinazione, uscita Host.** Tutte le tracce su `Host`; su una seconda traccia MIDI, `MIDI From` = traccia di DR. SEGG-UENCER, sotto `DR. SEGG-UENCER`, `Monitor` = `In`. Va bene per un Drum Rack, dove contano le note e non i canali. Funziona con il VST3, non con l'AU.
 
 ![Pagina ROUTING con 16 porte](docs/screenshot-routing.png)
-
-In ROUTING il controllo `NOTE` del deck diventa un menu a tendina, con le 128 note divise per ottava. Sulle altre pagine resta la barra da trascinare.
 
 ## Uscite CV
 La scheda `CV` di ROUTING manda i segnali delle tracce a 16 uscite CV. Sono uscite audio aggiuntive del plugin, a coppie stereo da `CV 1-2` a `CV 15-16`: la tensione arriva ai moduli solo con un'interfaccia **DC-coupled**, come la Expert Sleepers ES-8. Un'interfaccia normale blocca le tensioni lente, quindi pitch e gate non reggono.
