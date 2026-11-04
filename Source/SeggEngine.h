@@ -6,6 +6,7 @@
 // handled in time order across all tracks; that is what makes links between tracks sample accurate.
 #include "SeggCore.h"
 #include "MidiMap.h"
+#include "CvMap.h"
 
 namespace segg
 {
@@ -34,6 +35,9 @@ public:
     std::array<Pattern, kNumTracks> patterns;
     std::array<UiTrack, kNumTracks> ui;
     std::array<OutMapRow, kNumMapRows> outMap;
+    std::array<CvRow, kNumCvOuts> cvMap;
+    std::atomic<float> cvFullScale { kCvDefaultFullScale };    // volts of the interface at digital 1.0
+    std::atomic<int> cvZeroNote { kCvDefaultZeroNote };        // the note that sits at 0 V
     GlobalParams global;
 
     void prepare (double sampleRate) noexcept
@@ -44,9 +48,10 @@ public:
         for (int i = 0; i < kNumTracks; ++i) resetTrack (i);
     }
 
-    /** Runs one block; out.emit (sampleOffset, port, status, data1, data2) receives the MIDI in time order. */
+    /** Runs one block; out.emit (sampleOffset, port, status, data1, data2) receives the MIDI in time order.
+        cv: kNumCvOuts channels of numSamples each, already silent. Any of them can be null, or all of them. */
     template <class Sink>
-    void process (const Transport& t, Sink& out) noexcept
+    void process (const Transport& t, Sink& out, float* const* cv = nullptr) noexcept
     {
         if (t.numSamples <= 0) return;
         if (needsStop) { stopAll (out, 0); needsStop = false; }
@@ -59,6 +64,7 @@ public:
         {
             if (wasPlaying) stopAll (out, 0);
             wasPlaying = false;
+            renderCv (cv, t.numSamples);
             sampleClock += t.numSamples;
             return;
         }
@@ -73,6 +79,11 @@ public:
             relocate (t.ppq);       // loop wrap or a jump. Pending note-offs count samples, so they still arrive
         }
         expectedPpq = ppq1;
+
+        cvPosWanted.fill (false);
+        for (auto& row : cvMap)
+            if (row.signal.load (std::memory_order_relaxed) >= CvPosX)
+                cvPosWanted[(size_t) std::clamp (row.track.load (std::memory_order_relaxed), 0, kNumTracks - 1)] = true;
 
         for (int i = 0; i < kNumTracks; ++i) syncTrack (i, t.ppq);
 
@@ -95,6 +106,7 @@ public:
 
         flush (out);
         updateOutMap (out, ppq1, t.numSamples);
+        renderCv (cv, t.numSamples);
         sampleClock += t.numSamples;
         publishUi();
     }
@@ -148,6 +160,11 @@ private:
     struct Pending { std::int64_t when; std::uint32_t token; std::uint8_t port, status, d1, d2; };
 
     struct MapState { float value = 0.0f; int sent = -1, dest = DestOff, port = 0, ch = 0; std::int64_t nextSend = 0; };
+
+    // sorted by when, then kind: at the same sample a gate closes before the next one opens
+    enum CvEventKind : std::uint8_t { CvEventOff, CvEventOn, CvEventPos };
+    struct CvEvent { std::int64_t when; std::uint32_t token; std::uint8_t track, kind, note; float a, b; };
+    struct CvTrack { int note = -1; float vel = 0, rand = 0, x = 0, y = 0; bool gate = false; std::int64_t trigUntil = 0; std::uint32_t token = 0; };
 
     struct Fire { int offset = 0; float vel = 1.0f, gate = 1.0f, prob = 1.0f; int ratch = 1; };
 
@@ -213,6 +230,7 @@ private:
             physicsStep (i, when);
             ++tr.physCount;
             tr.physNext = (double) tr.physCount / kPhysPerBeat;
+            cvPosition (i, when);
             if (isClocked (p) || tr.nextT > when) return;
         }
         const auto tick = tr.tick;
@@ -295,6 +313,7 @@ private:
                 }
                 break;
         }
+        cvPosition (i, when);
         if (hit) fireNote (i, when, f, depth);
     }
 
@@ -591,15 +610,15 @@ private:
         tr.gateUntil = when + gateBeats;
         mapOnHit (i, port, ch, sampleClock + std::llround (on));
 
-        if (p.b (pNotes))
         for (int r = 0; r < ratch; ++r)
+        {
+            const auto start = sampleClock + std::llround (on + r * each / beat);
+            const int velHere = std::clamp (vel - r * vel / (ratch * 3), 1, 127);
+            scheduleCv (i, foldNote (root), (float) velHere / 127.0f, tr.sigRand, start, start + gateSamples);   // NOTES switches the MIDI only
+            if (! p.b (pNotes)) continue;
             for (int note : notes)
-            {
-                if (note == -1000) continue;
-                const auto start = sampleClock + std::llround (on + r * each / beat);
-                const int velHere = std::clamp (vel - r * vel / (ratch * 3), 1, 127);
-                schedule (port, ch, foldNote (note), velHere, start, start + gateSamples);
-            }
+                if (note != -1000) schedule (port, ch, foldNote (note), velHere, start, start + gateSamples);
+        }
 
         tr.lastFire = when;
         tr.lastOffset = f.offset;
@@ -637,6 +656,115 @@ private:
         const auto token = ++tokenCounter == 0 ? ++tokenCounter : tokenCounter;
         pool[(size_t) poolCount++] = { on, token, (std::uint8_t) port, (std::uint8_t) (0x90 | ch), (std::uint8_t) note, (std::uint8_t) vel };
         pool[(size_t) poolCount++] = { off, token, (std::uint8_t) port, (std::uint8_t) (0x80 | ch), (std::uint8_t) note, 0 };
+    }
+
+    // ---------------- CV
+
+    std::uint32_t nextCvToken() noexcept { return ++cvTokenCounter == 0 ? ++cvTokenCounter : cvTokenCounter; }
+
+    /** CV is one voice per track, the root of the chord. The newest note owns the gate, so overlapping gates stay high. */
+    void scheduleCv (int track, int note, float vel, float rnd, std::int64_t on, std::int64_t off) noexcept
+    {
+        if (cvCount + 2 > kPoolSize) return;       // full: drop the note, never a closing gate
+        const auto token = nextCvToken();
+        cvPool[(size_t) cvCount++] = { on, token, (std::uint8_t) track, CvEventOn, (std::uint8_t) note, vel, rnd };
+        cvPool[(size_t) cvCount++] = { off, token, (std::uint8_t) track, CvEventOff, (std::uint8_t) note, 0.0f, 0.0f };
+    }
+
+    /** The position signals change on events inside the block, so they are stamped like notes. */
+    void cvPosition (int i, double when) noexcept
+    {
+        if (! cvPosWanted[(size_t) i] || cvCount + kCvNoteReserve > kPoolSize) return;     // positions never crowd out gates
+        const auto at = sampleClock + std::llround ((when - block.ppq0) / std::max (1.0e-6, block.pps));
+        cvPool[(size_t) cvCount++] = { at, nextCvToken(), (std::uint8_t) i, CvEventPos, 0, mapSignal (i, OutPosX, when), mapSignal (i, OutPosY, when) };
+    }
+
+    void applyCv (const CvEvent& e) noexcept
+    {
+        auto& st = cvTracks[(size_t) e.track];
+        switch (e.kind)
+        {
+            case CvEventOn:
+                st.note = e.note; st.vel = e.a; st.rand = e.b; st.gate = true; st.token = e.token;
+                st.trigUntil = e.when + (std::int64_t) std::max (1.0, kCvTriggerSeconds * sr);
+                break;
+            case CvEventOff: if (st.token == e.token) st.gate = false; break;
+            default:         st.x = e.a; st.y = e.b; break;
+        }
+    }
+
+    /** Sample accurate: the block is cut at each event, so the voltages do not depend on the buffer size. */
+    void renderCv (float* const* cv, int n) noexcept
+    {
+        const auto end = sampleClock + n;
+        int due = 0;
+        for (int i = 0; i < cvCount;)
+        {
+            if (cvPool[(size_t) i].when < end)
+            {
+                cvDue[(size_t) due++] = cvPool[(size_t) i];
+                cvPool[(size_t) i] = cvPool[(size_t) --cvCount];
+            }
+            else ++i;
+        }
+        std::sort (cvDue.begin(), cvDue.begin() + due, [] (const CvEvent& a, const CvEvent& b) {
+            if (a.when != b.when) return a.when < b.when;
+            if (a.kind != b.kind) return a.kind < b.kind;
+            return a.token < b.token;
+        });
+        int pos = 0, e = 0;
+        while (pos < n)
+        {
+            while (e < due && cvDue[(size_t) e].when <= sampleClock + pos) applyCv (cvDue[(size_t) e++]);
+            const int next = e < due ? (int) std::clamp<std::int64_t> (cvDue[(size_t) e].when - sampleClock, pos + 1, n) : n;
+            writeCv (cv, pos, next);
+            pos = next;
+        }
+    }
+
+    void writeCv (float* const* cv, int from, int to) noexcept
+    {
+        const float full = std::clamp (cvFullScale.load (std::memory_order_relaxed), kCvMinFullScale, kCvMaxFullScale);
+        const int zero = cvZeroNote.load (std::memory_order_relaxed);
+        for (size_t r = 0; r < kNumCvOuts; ++r)
+        {
+            const auto& row = cvMap[r];
+            const int signal = row.signal.load (std::memory_order_relaxed);
+            float* out = cv != nullptr ? cv[r] : nullptr;
+            if (signal == CvOff) continue;
+            const int i = std::clamp (row.track.load (std::memory_order_relaxed), 0, kNumTracks - 1);
+            const auto& st = cvTracks[(size_t) i];
+            const float lo = (float) row.loMv.load (std::memory_order_relaxed) * 0.001f, hi = (float) row.hiMv.load (std::memory_order_relaxed) * 0.001f;
+            auto put = [out, full] (int s, float volts) noexcept { if (out != nullptr) out[s] = std::clamp (volts / full, -1.0f, 1.0f); };
+
+            if (signal == CvGate || signal == CvTrigger)
+            {   // hard edges: Slew does not apply
+                for (int s = from; s < to; ++s)
+                    put (s, (signal == CvGate ? st.gate : sampleClock + s < st.trigUntil) ? hi : lo);
+                continue;
+            }
+
+            float target = 0.0f;
+            switch (signal)
+            {
+                case CvPitch:    target = st.note < 0 ? 0.0f : (float) (st.note - zero) / 12.0f; break;   // 1 V per octave
+                case CvVelocity: target = lo + (hi - lo) * st.vel; break;
+                case CvRandom:   target = lo + (hi - lo) * st.rand; break;
+                case CvPosX:     target = lo + (hi - lo) * st.x; break;
+                default:         target = lo + (hi - lo) * st.y; break;
+            }
+            const int type = params[(size_t) i].i (pType);
+            const bool ramp = signal == CvPosY && wasPlaying && (type == Euclid || type == Step);    // this one moves between events
+            const int slew = row.slewMs.load (std::memory_order_relaxed);
+            const float glide = slew > 0 ? (float) (1.0 - std::exp (-1000.0 / (slew * sr))) : 1.0f;
+            auto& value = cvValue[r];
+            for (int s = from; s < to; ++s)
+            {
+                if (ramp) target = lo + (hi - lo) * mapSignal (i, OutPosY, block.ppq0 + s * block.pps + 1.0e-9);   // a wrap must not depend on rounding
+                value += (target - value) * glide;
+                put (s, value);
+            }
+        }
     }
 
     // ---------------- output map
@@ -787,6 +915,8 @@ private:
     void stopAll (Sink& out, int offset) noexcept
     {
         poolCount = 0;
+        cvCount = 0;
+        for (auto& st : cvTracks) { st.gate = false; st.trigUntil = 0; }    // the pitch holds, as on a sequencer that stops
         for (auto& st : mapState)
         {   // a bend left in the air would detune the synth until the next message
             if (st.dest == DestPitch && st.sent >= 0 && st.sent != kPitchCentre)
@@ -820,7 +950,7 @@ private:
         }
     }
 
-    static constexpr int kMaxLinkDepth = 3;
+    static constexpr int kMaxLinkDepth = 3, kCvNoteReserve = 1024;
 
     struct Block { double ppq0 = 0, pps = 0; int n = 0; } block;
     double sr = 48000.0, expectedPpq = 0;
@@ -831,6 +961,12 @@ private:
     std::array<Pending, kPoolSize> pool {}, dueList {};
     int poolCount = 0;
     std::array<MapState, kNumMapRows> mapState {};
+    std::array<CvEvent, kPoolSize> cvPool {}, cvDue {};
+    std::array<CvTrack, kNumTracks> cvTracks {};
+    std::array<float, kNumCvOuts> cvValue {};
+    std::array<bool, kNumTracks> cvPosWanted {};
+    int cvCount = 0;
+    std::uint32_t cvTokenCounter = 0;
     std::array<std::array<std::array<std::uint32_t, 128>, 16>, kNumSlots + 1> owner {};
 };
 } // namespace segg

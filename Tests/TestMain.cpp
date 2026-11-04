@@ -2,7 +2,7 @@
 // Run:  DrSeggUencerTests                        -> unit tests (exit code 1 on failure)
 //       DrSeggUencerTests --snap file track [page] [preset] [scale] -> render the editor to a PNG, track 1-16,
 //                                     page 0 = tracks, 1 = routing, 2 = MIDI map input, 3 = MIDI map output,
-//                                     4 = routing with the Windows help, 10+ = step lane; scale = window size (1 = 1280 x 800)
+//                                     4 = routing with the Windows help, 5 = routing CV, 10+ = step lane; scale = window size (1 = 1280 x 800)
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SeggProcessor.h"
 #include "SeggEditor.h"
@@ -46,7 +46,7 @@ struct Rig
     {
         head.bpm = bpm;
         p.setPlayHead (&head);
-        p.setPlayConfigDetails (0, 2, sr, block);
+        p.setRateAndBufferSizeDetails (sr, block);     // setPlayConfigDetails would switch the CV outputs off
         p.prepareToPlay (sr, block);
     }
     void set (const juce::String& id, float v)
@@ -1028,6 +1028,180 @@ static void testOutputMap()
     std::printf ("  CC Lanes: %d CC, %d other, %d notes in 8 s\n", ccCount, bends, (int) l.ons().size());
 }
 
+/** Plays and keeps the audio of every output: channel 2 + n is CV output n. */
+struct CvRig : Rig
+{
+    using Rig::Rig;
+    std::array<std::vector<float>, kNumCvOuts> cv;
+    void render (double beats)
+    {
+        juce::AudioBuffer<float> buf (2 + kNumCvOuts, block);
+        juce::MidiBuffer midi;
+        const auto n = (long long) (beats * 60.0 / head.bpm * sr / block);
+        for (long long b = 0; b < n; ++b)
+        {
+            midi.clear();
+            p.processBlock (buf, midi);
+            for (int c = 0; c < kNumCvOuts; ++c)
+                cv[(size_t) c].insert (cv[(size_t) c].end(), buf.getReadPointer (2 + c), buf.getReadPointer (2 + c) + block);
+            for (int s = 0; s < 2; ++s) if (buf.getMagnitude (s, 0, block) != 0.0f) mainSilent = false;
+            if (head.playing) head.ppq += block * head.bpm / (60.0 * sr);
+        }
+    }
+    void assign (int out, int track, int signal, int loMv = 0, int hiMv = 5000, int slewMs = 0)
+    {
+        auto& row = p.engine.cvMap[(size_t) out];
+        row.track = track; row.loMv = loMv; row.hiMv = hiMv; row.slewMs = slewMs; row.signal = signal;
+    }
+    bool mainSilent = true;
+};
+
+static void testCv()
+{
+    {
+        Rig r;
+        CHECK (r.p.getBusCount (false) == 1 + kNumCvBuses && r.p.getTotalNumOutputChannels() == 2 + kNumCvOuts, "16 CV outputs, in pairs after the silent main output");
+        CHECK (r.p.getBus (false, 1)->getName() == "CV 1-2" && r.p.getBus (false, 8)->getName() == "CV 15-16", "the pairs are named after their outputs");
+        auto layout = r.p.getBusesLayout();
+        layout.getChannelSet (false, 3) = juce::AudioChannelSet::disabled();
+        CHECK (r.p.isBusesLayoutSupported (layout), "a host may switch a CV pair off");
+    }
+    {   // the plugin must keep working when a host gives it only the main output
+        Rig r;
+        r.solo (0, Euclid);
+        auto& row = r.p.engine.cvMap[0];
+        row.track = 0; row.signal = CvGate;
+        r.run (2.0);
+        CHECK (! r.ons().empty(), "a buffer without CV channels is safe");
+    }
+
+    // pitch: 1 V per octave around the note at 0 V, scaled to the interface
+    {
+        CvRig r;
+        r.solo (0, Step);
+        r.set (0, pSlen, 2); r.set (0, pRate, 5); r.set (0, pScale, 1); r.set (0, pNote, 60);
+        r.p.engine.patterns[0].step[0].set (1, 12); r.p.engine.patterns[0].step[1].set (1, -7);
+        r.assign (0, 0, CvPitch); r.assign (1, 0, CvGate, -1000, 8000);
+        r.p.engine.cvFullScale = 10.0f;
+        r.p.engine.cvZeroNote = 60;
+        r.render (2.5);
+        const auto at = [&] (int ch, double beat) { return r.cv[(size_t) ch][(size_t) (beat * r.samplesPerBeat())]; };
+        CHECK (std::abs (at (0, 0.2) - 0.1f) < 1.0e-5f, "an octave above the note at 0 V is +1 V");
+        CHECK (std::abs (at (0, 1.2) - (-7.0f / 12.0f / 10.0f)) < 1.0e-5f, "a fifth below is -7/12 V");
+        CHECK (std::abs (at (1, 0.2) - 0.8f) < 1.0e-5f && std::abs (at (1, 0.75) - (-0.1f)) < 1.0e-5f, "Gate moves between Min and Max");
+        CHECK (r.mainSilent, "the main output stays silent");
+
+        CvRig half;
+        half.solo (0, Step);
+        half.set (0, pSlen, 1); half.set (0, pRate, 5); half.set (0, pScale, 1); half.set (0, pNote, 60);
+        half.p.engine.patterns[0].step[0].set (1, 12);
+        half.assign (0, 0, CvPitch);
+        half.p.engine.cvFullScale = 5.0f;
+        half.p.engine.cvZeroNote = 48;
+        half.render (1.0);
+        CHECK (std::abs (half.cv[0][4000] - 0.4f) < 1.0e-5f, "Full Scale and the note at 0 V set the voltage");
+    }
+
+    // sample accurate, trigger length, and independent of the buffer size
+    {
+        auto play = [] (int block) {
+            auto r = std::make_unique<CvRig> (block);
+            r->solo (0, Euclid);
+            r->set (0, pEsteps, 16); r->set (0, pEpulses, 5); r->set (0, pGate, 75); r->set (0, pSeed, 5); r->set (0, pVrand, 40); r->set (0, pChord, 3);
+            r->set (1, pOn, 1); r->set (1, pType, Physics); r->set (1, pPspeed, 40); r->set (1, pNotes, 0);
+            r->assign (0, 0, CvPitch); r->assign (1, 0, CvGate); r->assign (2, 0, CvTrigger); r->assign (3, 0, CvVelocity); r->assign (4, 0, CvRandom);
+            r->assign (5, 0, CvPosX); r->assign (6, 0, CvPosY); r->assign (7, 1, CvPosX); r->assign (8, 1, CvGate); r->assign (9, 0, CvPitch, 0, 0, 30);
+            r->render (8.2);
+            return r;
+        };
+        auto a = play (64), b = play (777);
+        const size_t n = std::min (a->cv[0].size(), b->cv[0].size());
+        double worst = 0.0;
+        for (size_t c = 0; c < kNumCvOuts; ++c) for (size_t s = 0; s < n; ++s) worst = std::max (worst, (double) std::abs (a->cv[c][s] - b->cv[c][s]));
+        std::printf ("  CV difference between buffer sizes: %.6f of full scale\n", worst);
+        CHECK (worst < 1.0e-3, "the CV does not depend on the buffer size");
+
+        int rise = -1, fall = -1;
+        for (size_t s = 1; s < a->cv[2].size(); ++s)
+        {
+            if (rise < 0 && a->cv[2][s] > 0.25f && a->cv[2][s - 1] <= 0.25f) rise = (int) s;
+            else if (rise >= 0 && a->cv[2][s] <= 0.25f) { fall = (int) s; break; }
+        }
+        CHECK (rise > 0 && fall - rise == (int) (0.005 * a->sr), "Trigger lasts 5 ms");
+        std::set<float> levels (a->cv[7].begin(), a->cv[7].end());
+        CHECK (levels.size() > 30, "a track with NOTES off still drives its CV");
+        bool ramps = false;
+        for (size_t s = 1000; s < 2000; ++s) ramps = ramps || a->cv[6][s] != a->cv[6][s - 1];
+        CHECK (ramps, "Position Y ramps between steps");
+        float glideMax = 0.0f;
+        for (size_t s = 1; s < a->cv[9].size(); ++s) glideMax = std::max (glideMax, std::abs (a->cv[9][s] - a->cv[9][s - 1]));
+        CHECK (glideMax < 0.01f, "Slew glides between notes");
+    }
+
+    // overlapping gates stay open, and stopping closes them
+    {
+        CvRig r;
+        r.solo (0, Euclid);
+        r.set (0, pEsteps, 1); r.set (0, pEpulses, 1); r.set (0, pRate, 5); r.set (0, pGate, 300);
+        r.assign (0, 0, CvGate);
+        r.render (3.5);
+        bool held = true;
+        for (size_t s = 100; s < r.cv[0].size(); ++s) held = held && r.cv[0][s] > 0.25f;
+        CHECK (held, "overlapping notes keep the gate high");
+        r.head.playing = false;
+        r.render (0.1);
+        CHECK (r.cv[0].back() == 0.0f, "stopping closes the gates");
+    }
+
+    // assignments travel like the output map, calibration stays with the session
+    {
+        Rig c;
+        auto& row = c.p.engine.cvMap[9];
+        row.track = 7; row.signal = CvPosY; row.loMv = -2500; row.hiMv = 7500; row.slewMs = 250;
+        c.p.engine.cvFullScale = 5.25f;
+        c.p.engine.cvZeroNote = 36;
+        juce::MemoryBlock session;
+        c.p.getStateInformation (session);
+        Rig e;
+        e.p.setStateInformation (session.getData(), (int) session.getSize());
+        const auto& got = e.p.engine.cvMap[9];
+        CHECK (got.track.load() == 7 && got.signal.load() == CvPosY && got.loMv.load() == -2500 && got.hiMv.load() == 7500 && got.slewMs.load() == 250, "sessions carry the CV table");
+        CHECK (std::abs (e.p.engine.cvFullScale.load() - 5.25f) < 1.0e-5f && e.p.engine.cvZeroNote.load() == 36, "sessions carry the calibration");
+
+        c.p.presets.save ("__segg_cv_test");
+        Rig d;
+        d.p.engine.cvFullScale = 7.0f;
+        d.p.presets.refresh();
+        d.p.presets.load (d.p.presets.getNames().indexOf ("__segg_cv_test"));
+        CHECK (d.p.engine.cvMap[9].signal.load() == CvPosY, "user presets carry the CV table");
+        CHECK (std::abs (d.p.engine.cvFullScale.load() - 7.0f) < 1.0e-5f, "a preset leaves the calibration alone");
+        c.p.presets.removeCurrent();
+        d.p.presets.load (0);
+        CHECK (d.p.engine.cvMap[9].signal.load() == CvOff, "Init clears the CV table");
+    }
+
+    // the new outputs must not change a single note
+    {
+        Rig a, b;
+        for (Rig* x : { &a, &b }) { x->solo (0, Turing); x->set (0, pTknob, 50); x->set (0, pTdens, 100); x->set (0, pRoll, 40); }
+        b.p.engine.cvMap[0].signal = CvPitch;
+        b.p.engine.cvMap[1].signal = CvPosX;
+        a.run (8.0); b.run (8.0);
+        bool sameNotes = a.ons().size() == b.ons().size() && ! a.ons().empty();
+        for (size_t i = 0; sameNotes && i < a.ons().size(); ++i) sameNotes = a.ons()[i].note == b.ons()[i].note && a.ons()[i].sample == b.ons()[i].sample;
+        CHECK (sameNotes, "CV does not change the notes");
+    }
+
+    // the menu shows the same 128 notes as the parameter
+    {
+        juce::ComboBox box;
+        fillNoteMenu (box);
+        CHECK (box.getNumItems() == 128, "the note menu holds every MIDI note");
+        box.setSelectedId (36 + 1, juce::dontSendNotification);
+        CHECK (box.getText() == "C1" && box.getSelectedItemIndex() == 36, "note 36 reads C1, as on the NOTE bar");
+    }
+}
+
 static void testSpeed()
 {
     Rig r (32);
@@ -1078,6 +1252,7 @@ int main (int argc, char** argv)
     testPortMemory();
     testInputMap();
     testOutputMap();
+    testCv();
     testSpeed();
     std::printf ("%d checks passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
@@ -1094,7 +1269,19 @@ static void runSnap (const juce::String& path, int track, int page, int preset, 
         if (auto* oe = dynamic_cast<SeggEditor*> (ed.get()))
         {
             oe->selectTrack (track - 1);
-            if (page == 1 || page == 4) oe->showRouting (true);
+            if (page == 1 || page == 4 || page == 5) oe->showRouting (true);
+            if (page == 5)
+            {
+                struct S { int track, signal, lo, hi, slew; };
+                const S demo[] = { { 0, CvPitch, 0, 0, 0 }, { 0, CvGate, 0, 5000, 0 }, { 1, CvPitch, 0, 0, 40 }, { 1, CvTrigger, 0, 5000, 0 }, { 2, CvVelocity, 0, 8000, 0 }, { 2, CvPosX, -5000, 5000, 120 } };
+                int row = 0;
+                for (auto d : demo)
+                {
+                    auto& m = r.p.engine.cvMap[(size_t) row++];
+                    m.track = d.track; m.signal = d.signal; m.loMv = d.lo; m.hiMv = d.hi; m.slewMs = d.slew;
+                }
+                oe->showRoutingCv (true);
+            }
             if (page == 4) oe->setWindowsHelp (true);
             if (page == 2 || page == 3)
             {

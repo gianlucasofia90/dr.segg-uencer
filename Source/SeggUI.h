@@ -339,6 +339,19 @@ public:
     void mouseUp (const juce::MouseEvent& e) override   { if (! e.mods.isPopupMenu()) juce::TextButton::mouseUp (e); }
 };
 
+inline juce::String noteLabel (int n) { return juce::String (kNoteNames[n % 12]) + juce::String (n / 12 - 2); }
+
+/** All 128 notes, one submenu per octave. Item ids are the MIDI note + 1. */
+inline void fillNoteMenu (juce::ComboBox& box)
+{
+    for (int octave = 0; octave * 12 < 128; ++octave)
+    {
+        juce::PopupMenu sub;
+        for (int n = octave * 12; n < juce::jmin (128, (octave + 1) * 12); ++n) sub.addItem (n + 1, noteLabel (n));
+        box.getRootMenu()->addSubMenu ("Octave " + juce::String (octave - 2), sub);
+    }
+}
+
 /** Parameter-bound control. Kinds: Knob, Box (number bar), VSlider, HBar, Toggle, Menu. Empty label = no caption.
     Knobs carry their caption between the knob and the value; the other kinds above the control. */
 class Control : public juce::Component
@@ -370,6 +383,7 @@ public:
         else if (k == Kind::Menu)
         {
             if (auto* p = dynamic_cast<juce::AudioParameterChoice*> (s.getParameter (id))) combo.addItemList (p->choices, 1);
+            else fillNoteMenu (combo);       // the only menu that is not a choice: a track's Note
             addAndMakeVisible (combo);
             ca = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (s, id, combo);
         }
@@ -1129,8 +1143,43 @@ private:
     int type;
 };
 
-/** Assigns the 16 direct ports: hardware interface ports, or virtual ports that Live can use as a MIDI input.
-    macOS and Linux can create a virtual port; Windows has none of its own, so there a loopMIDI port shows up here. */
+/** A number you drag, with its value drawn on the bar. */
+class NumberBox : public juce::Slider
+{
+public:
+    NumberBox (int lo, int hi, juce::String unitText = {}) : NumberBox ((double) lo, (double) hi, 1.0, 0, std::move (unitText)) {}
+
+    NumberBox (double lo, double hi, double step, int decimalPlaces, juce::String unitText) : decimals (decimalPlaces), unit (std::move (unitText))
+    {
+        setSliderStyle (juce::Slider::LinearBar);
+        setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        setRange (lo, hi, step);
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        g.setFont (pixel (10.0f));
+        g.setColour (isEnabled() ? c::ink : c::ink.withAlpha (0.3f));
+        const auto number = decimals > 0 ? juce::String (getValue(), decimals) : juce::String (juce::roundToInt (getValue()));
+        const auto text = number + unit;
+        if (getMinimum() < 0.0)
+        {   // a bipolar bar is green or red under the text
+            const auto patch = juce::Rectangle<float> (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), text) + 6.0f, 12.0f).withCentre (getLocalBounds().toFloat().getCentre());
+            g.setColour (juce::Colours::white.withAlpha (isEnabled() ? 1.0f : 0.5f));
+            g.fillRoundedRectangle (patch, 2.0f);
+            g.setColour (isEnabled() ? c::ink : c::ink.withAlpha (0.3f));
+        }
+        g.drawText (text, getLocalBounds(), juce::Justification::centred);
+    }
+
+private:
+    int decimals;
+    juce::String unit;
+};
+
+/** MIDI: assigns the 16 direct ports, hardware interface ports or virtual ports that Live can use as a MIDI input.
+    macOS and Linux can create a virtual port; Windows has none of its own, so there a loopMIDI port shows up here.
+    CV: assigns the signals of the tracks to the 16 CV outputs, which are extra audio outputs of the plugin. */
 class RoutingPage : public juce::Component
 {
 public:
@@ -1149,12 +1198,77 @@ public:
         addAndMakeVisible (rescan);
         rescan.setButtonText ("RESCAN");
         rescan.onClick = [this] { refresh(); };
+
+        for (auto* b : { &midiTab, &cvTab })
+        {
+            b->setClickingTogglesState (true);
+            b->setRadioGroupId (3);
+            addAndMakeVisible (b);
+            b->onClick = [this] { showRows(); };
+        }
+        midiTab.setButtonText ("MIDI");
+        cvTab.setButtonText ("CV");
+        midiTab.setToggleState (true, juce::dontSendNotification);
+
+        juce::StringArray tracks, signals;
+        for (int i = 1; i <= kNumTracks; ++i) tracks.add ("T" + juce::String (i));
+        for (auto* s : kCvSignalNames) signals.add (s);
+        for (int i = 0; i < kNumCvOuts; ++i)
+        {
+            auto* row = cvRows.add (new CvRowUi());
+            auto& model = proc.engine.cvMap[(size_t) i];
+            row->track.addItemList (tracks, 1);
+            row->signal.addItemList (signals, 1);
+            row->track.onChange = [&model, row] { model.track = row->track.getSelectedItemIndex(); };
+            row->signal.onChange = [this, &model, row] { model.signal = row->signal.getSelectedItemIndex(); sync(); };
+            row->lo.onValueChange = [&model, row] { model.loMv = juce::roundToInt (row->lo.getValue() * 1000.0); };
+            row->hi.onValueChange = [&model, row] { model.hiMv = juce::roundToInt (row->hi.getValue() * 1000.0); };
+            row->slew.onValueChange = [&model, row] { model.slewMs = (int) row->slew.getValue(); };
+            for (auto* comp : row->all()) addChildComponent (comp);
+        }
+        fillNoteMenu (zeroNote);
+        fullScale.onValueChange = [this] { proc.engine.cvFullScale = (float) fullScale.getValue(); };
+        zeroNote.onChange = [this] { proc.engine.cvZeroNote = zeroNote.getSelectedId() - 1; };
+        addChildComponent (fullScale);
+        addChildComponent (zeroNote);
+
         refresh();
+        showRows();
         // a port created in loopMIDI, or an interface plugged in, shows up without pressing anything
         deviceWatcher = juce::MidiDeviceListConnection::make ([this] { refresh(); });
     }
 
     void setWindowsHelp (bool on) { windowsHelp = on; repaint(); }
+
+    bool showingCv() const { return cvTab.getToggleState(); }
+    void showCv (bool on) { (on ? cvTab : midiTab).setToggleState (true, juce::dontSendNotification); showRows(); }
+
+    /** Brings the CV table in line with the engine: presets and sessions change it from outside. */
+    void sync()
+    {
+        auto idle = [] (juce::Slider& s, double v) { if (! s.isMouseButtonDown()) s.setValue (v, juce::dontSendNotification); };
+        for (int i = 0; i < kNumCvOuts; ++i)
+        {
+            auto& row = *cvRows[i];
+            const auto& m = proc.engine.cvMap[(size_t) i];
+            const int signal = m.signal.load();
+            row.track.setSelectedItemIndex (m.track.load(), juce::dontSendNotification);
+            row.signal.setSelectedItemIndex (signal, juce::dontSendNotification);
+            idle (row.lo, m.loMv.load() * 0.001);
+            idle (row.hi, m.hiMv.load() * 0.001);
+            idle (row.slew, m.slewMs.load());
+            const bool on = signal != CvOff, edges = signal == CvGate || signal == CvTrigger;
+            row.track.setEnabled (on);
+            row.lo.setEnabled (on);
+            row.hi.setEnabled (on);
+            row.slew.setEnabled (on && ! edges);
+            const bool range = showingCv() && signal != CvPitch;      // Pitch is 1 V/oct: it has no range
+            if (row.lo.isVisible() != range) { row.lo.setVisible (range); row.hi.setVisible (range); }
+        }
+        idle (fullScale, proc.engine.cvFullScale.load());
+        if (! zeroNote.isPopupActive()) zeroNote.setSelectedId (proc.engine.cvZeroNote.load() + 1, juce::dontSendNotification);
+        repaint();
+    }
 
     void refresh()
     {
@@ -1189,6 +1303,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        if (showingCv()) { paintCv (g); return; }
         for (int i = 0; i < kNumSlots; ++i)
         {
             const auto box = boxes[i]->getBounds();
@@ -1207,8 +1322,6 @@ public:
             g.drawText (failed ? juce::String ("UNAVAILABLE") : (used.isEmpty() ? juce::String ("-") : used.joinIntoString (" ")),
                         box.getRight() + 8, box.getY(), kColumnW - kBoxW - 58, 22, juce::Justification::centredLeft, true);
         }
-        auto r = juce::Rectangle<int> (0, 278, getWidth() - 8, getHeight() - 278);
-        struct Note { const char* head; const char* body; };
         const Note virtualNote = windowsHelp
             ? Note { "PLUGINS IN ABLETON LIVE ON WINDOWS",
                      "Windows has no virtual MIDI ports of its own. Install loopMIDI and add a port: it appears in the lists above. Assign it, then in Live's MIDI "
@@ -1216,10 +1329,41 @@ public:
             : Note { "PLUGINS IN ABLETON LIVE",
                      "Choose a virtual port. In Live's MIDI settings set Track to On for that input, then on each instrument track pick it under MIDI From, "
                      "with the track's channel, and set Monitor to In." };
-        for (auto n : { Note { "HARDWARE", "Assign the ports of your MIDI interface above, then choose Port and Channel on each track. "
-                                           "A port marked UNAVAILABLE is held by another program: switch it off in Live's Output Ports." },
-                        virtualNote,
-                        Note { "HOST", "Live merges the plugin's output onto one channel. Use it for a single receiving track, such as a Drum Rack." } })
+        drawNotes (g, 278, { Note { "HARDWARE", "Assign the ports of your MIDI interface above, then choose Port and Channel on each track. "
+                                                "A port marked UNAVAILABLE is held by another program: switch it off in Live's Output Ports." },
+                             virtualNote,
+                             Note { "HOST", "Live merges the plugin's output onto one channel. Use it for a single receiving track, such as a Drum Rack." } });
+    }
+
+    void resized() override
+    {
+        for (int i = 0; i < kNumSlots; ++i) boxes[i]->setBounds (44 + (i / 8) * kColumnW, 48 + i % 8 * 28, kBoxW, 22);
+        midiTab.setBounds (getWidth() - 200, 0, 98, 30);
+        cvTab.setBounds (getWidth() - 102, 0, 98, 30);
+        rescan.setBounds (getWidth() - 300, 2, 96, 30);
+        for (int i = 0; i < kNumCvOuts; ++i)
+        {
+            auto& row = *cvRows[i];
+            const int x = (i / 8) * kColumnW, y = kCvRowY + i % 8 * kCvRowH, h = 22;
+            row.track.setBounds (x + kCvTrackX, y, 62, h);    row.signal.setBounds (x + kCvSignalX, y, 106, h);
+            row.lo.setBounds (x + kCvLoX, y, 54, h);          row.hi.setBounds (x + kCvHiX, y, 54, h);
+            row.slew.setBounds (x + kCvSlewX, y, 60, h);
+        }
+        fullScale.setBounds (kCalValueX, kCalY, 84, 22);
+        zeroNote.setBounds (kCalNoteX, kCalY, 70, 22);
+    }
+
+private:
+    static constexpr int kColumnW = 412, kBoxW = 258;
+    static constexpr int kCvRowY = 60, kCvRowH = 27, kCvTrackX = 44, kCvSignalX = 110, kCvLoX = 220, kCvHiX = 278, kCvSlewX = 336;
+    static constexpr int kCalY = 280, kCalValueX = 84, kCalNoteX = 256;
+
+    struct Note { const char* head; const char* body; };
+
+    void drawNotes (juce::Graphics& g, int top, std::initializer_list<Note> notes)
+    {
+        auto r = juce::Rectangle<int> (0, top, getWidth() - 8, getHeight() - top);
+        for (auto n : notes)
         {
             g.setColour (c::ink);
             g.setFont (bold (11.0f, 0.06f));
@@ -1231,46 +1375,76 @@ public:
         }
     }
 
-    void resized() override
+    void paintCv (juce::Graphics& g)
     {
-        for (int i = 0; i < kNumSlots; ++i) boxes[i]->setBounds (44 + (i / 8) * kColumnW, 48 + i % 8 * 28, kBoxW, 22);
-        rescan.setBounds (getWidth() - 100, 2, 96, 30);
+        g.setColour (c::ink);
+        g.setFont (bold (11.0f, 0.06f));
+        struct Head { const char* text; int x; };
+        for (int column = 0; column < 2; ++column)
+            for (auto h : { Head { "TRACK", kCvTrackX }, Head { "SIGNAL", kCvSignalX }, Head { "MIN", kCvLoX }, Head { "MAX", kCvHiX }, Head { "SLEW", kCvSlewX } })
+                g.drawText (h.text, column * kColumnW + h.x, kCvRowY - 17, 60, 14, juce::Justification::left);
+
+        for (int i = 0; i < kNumCvOuts; ++i)
+        {
+            const auto track = cvRows[i]->track.getBounds();
+            const int signal = proc.engine.cvMap[(size_t) i].signal.load();
+            const bool closed = signal != CvOff && ! proc.isCvOutputOpen (i);
+            g.setFont (black (13.0f));
+            g.setColour (c::ink);
+            g.drawText (juce::String (i + 1), track.getX() - 44, track.getY(), 24, 22, juce::Justification::centredLeft);
+            g.setColour (closed ? c::signal : (signal != CvOff ? c::go : c::inkSoft.withAlpha (0.3f)));
+            g.fillEllipse (juce::Rectangle<float> (10, 10).withCentre ({ (float) track.getX() - 14, (float) track.getY() + 11 }));
+            if (signal == CvPitch)
+            {
+                g.setFont (pixel (10.0f));
+                g.setColour (c::inkSoft);
+                g.drawText ("1 V/OCT", cvRows[i]->lo.getBounds().getUnion (cvRows[i]->hi.getBounds()), juce::Justification::centred);
+            }
+        }
+
+        g.setColour (c::ink);
+        g.setFont (bold (11.0f, 0.06f));
+        g.drawText ("FULL SCALE", 0, kCalY, kCalValueX - 6, 22, juce::Justification::centredLeft);
+        g.drawText ("NOTE AT 0 V", kCalNoteX - 78, kCalY, 72, 22, juce::Justification::centredLeft);
+        drawNotes (g, 314, { Note { "INTERFACE", "CV needs a DC-coupled audio interface: an ordinary one blocks slow voltages. Set FULL SCALE to the voltage it reaches at digital "
+                                                 "full scale, 10 V on an ES-8. Pitch follows the root note of each track at 1 V per octave." },
+                             Note { "ABLETON LIVE", "Each pair of CV outputs is an output of the plugin. On an audio track set Audio From to the plugin's track and pick the pair, "
+                                                    "set Monitor to In and Audio To to the interface. Keep the track at 0 dB without effects, or the voltages change." },
+                             Note { "RED LIGHT", "The host has switched that output off. NOTES on a track mutes its MIDI only, so a track can drive CV alone." } });
     }
 
-private:
-    static constexpr int kColumnW = 412, kBoxW = 258;
+    void showRows()
+    {
+        const bool cv = showingCv();
+        for (auto* box : boxes) box->setVisible (! cv);
+        rescan.setVisible (! cv);
+        for (auto* row : cvRows) { row->track.setVisible (cv); row->signal.setVisible (cv); row->slew.setVisible (cv); }
+        fullScale.setVisible (cv);
+        zeroNote.setVisible (cv);
+        for (auto* row : cvRows) if (! cv) { row->lo.setVisible (false); row->hi.setVisible (false); }
+        sync();
+    }
+
+    struct CvRowUi
+    {
+        juce::ComboBox track, signal;
+        NumberBox lo { -10.0, 10.0, 0.1, 1, " V" }, hi { -10.0, 10.0, 0.1, 1, " V" }, slew { 0, kCvMaxSlewMs, " MS" };
+        std::vector<juce::Component*> all() { return { &track, &signal, &lo, &hi, &slew }; }
+    };
+
     SeggProcessor& proc;
     juce::OwnedArray<juce::ComboBox> boxes;
     juce::StringArray deviceIds;
-    juce::TextButton rescan;
+    juce::TextButton rescan, midiTab, cvTab;
+    juce::OwnedArray<CvRowUi> cvRows;
+    NumberBox fullScale { (double) kCvMinFullScale, (double) kCvMaxFullScale, 0.01, 2, " V" };
+    juce::ComboBox zeroNote;
     juce::MidiDeviceListConnection deviceWatcher;
    #if JUCE_WINDOWS
     bool windowsHelp = true;
    #else
     bool windowsHelp = false;
    #endif
-};
-
-/** A number you drag, with its value drawn on the bar. */
-class NumberBox : public juce::Slider
-{
-public:
-    NumberBox (int lo, int hi, juce::String unitText = {}) : unit (std::move (unitText))
-    {
-        setSliderStyle (juce::Slider::LinearBar);
-        setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-        setRange (lo, hi, 1.0);
-    }
-
-    void paintOverChildren (juce::Graphics& g) override
-    {
-        g.setFont (pixel (10.0f));
-        g.setColour (isEnabled() ? c::ink : c::ink.withAlpha (0.3f));
-        g.drawText (juce::String ((int) getValue()) + unit, getLocalBounds(), juce::Justification::centred);
-    }
-
-private:
-    juce::String unit;
 };
 
 /** Chooses a parameter: Global, then one submenu per track. Shows the parameter's name. */

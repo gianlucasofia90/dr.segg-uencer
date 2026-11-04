@@ -107,8 +107,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SeggProcessor::createLayout(
     return l;
 }
 
+juce::AudioProcessor::BusesProperties SeggProcessor::makeBuses()
+{
+    auto buses = BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true);
+    for (int i = 0; i < kNumCvBuses; ++i)     // on by default: a host only offers the outputs it has activated
+        buses = buses.withOutput ("CV " + juce::String (i * 2 + 1) + "-" + juce::String (i * 2 + 2), juce::AudioChannelSet::stereo(), true);
+    return buses;
+}
+
 SeggProcessor::SeggProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (makeBuses()),
       state (*this, nullptr, "DRSEGG", createLayout()),
       presets (*this)
 {
@@ -128,7 +136,20 @@ SeggProcessor::SeggProcessor()
 bool SeggProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto out = layouts.getMainOutputChannelSet();
-    return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
+    if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono()) return false;
+    // each pair of CV outputs is free: a host may switch it off, or take one side only
+    for (int bus = 1; bus < layouts.outputBuses.size(); ++bus)
+    {
+        const auto cv = layouts.getChannelSet (false, bus);
+        if (! cv.isDisabled() && cv != juce::AudioChannelSet::stereo() && cv != juce::AudioChannelSet::mono()) return false;
+    }
+    return true;
+}
+
+bool SeggProcessor::isCvOutputOpen (int output) const
+{
+    const auto* bus = getBus (false, 1 + output / 2);
+    return bus != nullptr && bus->isEnabled() && output % 2 < bus->getNumberOfChannels();
 }
 
 void SeggProcessor::prepareToPlay (double sampleRate, int)
@@ -225,8 +246,16 @@ void SeggProcessor::runBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer
     uiPlaying.store (t.playing, std::memory_order_relaxed);
     uiBpm.store ((float) t.bpm, std::memory_order_relaxed);
 
+    std::array<float*, kNumCvOuts> cv {};
+    for (int i = 0; i < kNumCvOuts; ++i)
+        if (isCvOutputOpen (i))
+        {
+            const int channel = getChannelIndexInProcessBlockBuffer (false, 1 + i / 2, i % 2);
+            if (channel < buffer.getNumChannels()) cv[(size_t) i] = buffer.getWritePointer (channel);
+        }
+
     Sink sink { midi, direct, direct.blockStartMs (t.numSamples, sr) + gOffset->load(), 1000.0 / sr };
-    engine.process (t, sink);
+    engine.process (t, sink, cv.data());
     if (panicRequested.exchange (false)) engine.panic (sink);
 }
 
@@ -452,11 +481,44 @@ void SeggProcessor::outMapFromTree (const juce::ValueTree& tree)
     }
 }
 
+juce::ValueTree SeggProcessor::cvMapToTree() const
+{
+    juce::ValueTree tree ("CVMAP");
+    for (auto& row : engine.cvMap)
+    {
+        juce::ValueTree node ("ROW");
+        node.setProperty ("track", row.track.load(), nullptr);
+        node.setProperty ("signal", row.signal.load(), nullptr);
+        node.setProperty ("lo", row.loMv.load(), nullptr);
+        node.setProperty ("hi", row.hiMv.load(), nullptr);
+        node.setProperty ("slew", row.slewMs.load(), nullptr);
+        tree.appendChild (node, nullptr);
+    }
+    return tree;
+}
+
+void SeggProcessor::cvMapFromTree (const juce::ValueTree& tree)
+{
+    for (int i = 0; i < kNumCvOuts; ++i)
+    {
+        auto& row = engine.cvMap[(size_t) i];
+        row.clear();
+        const auto node = tree.getChild (i);
+        if (! node.isValid()) continue;
+        row.track = juce::jlimit (0, kNumTracks - 1, (int) node["track"]);
+        row.loMv = juce::jlimit (-kCvMaxMv, kCvMaxMv, (int) node["lo"]);
+        row.hiMv = juce::jlimit (-kCvMaxMv, kCvMaxMv, (int) node["hi"]);
+        row.slewMs = juce::jlimit (0, kCvMaxSlewMs, (int) node["slew"]);
+        row.signal = juce::jlimit (0, kNumCvSignals - 1, (int) node["signal"]);
+    }
+}
+
 std::unique_ptr<juce::XmlElement> SeggProcessor::createPresetXml()
 {
     auto copy = state.copyState();
     copy.appendChild (patternsToTree(), nullptr);
     copy.appendChild (outMapToTree(), nullptr);      // the output map is part of the music
+    copy.appendChild (cvMapToTree(), nullptr);       // so is which track drives which CV
     return copy.createXml();
 }
 
@@ -464,11 +526,12 @@ bool SeggProcessor::applyPresetXml (const juce::XmlElement& xml)
 {
     if (! xml.hasTagName (state.state.getType())) return false;
     auto tree = juce::ValueTree::fromXml (xml);
-    const auto patterns = tree.getChildWithName ("PATTERNS"), outMap = tree.getChildWithName ("OUTMAP");
-    for (auto* name : { "PATTERNS", "OUTMAP", "PORTS", "INMAP" }) tree.removeChild (tree.getChildWithName (name), nullptr);
+    const auto patterns = tree.getChildWithName ("PATTERNS"), outMap = tree.getChildWithName ("OUTMAP"), cvMap = tree.getChildWithName ("CVMAP");
+    for (auto* name : { "PATTERNS", "OUTMAP", "CVMAP", "PORTS", "INMAP" }) tree.removeChild (tree.getChildWithName (name), nullptr);
     state.replaceState (tree);
     patternsFromTree (patterns);
     outMapFromTree (outMap);
+    cvMapFromTree (cvMap);
     return true;
 }
 
@@ -481,6 +544,8 @@ void SeggProcessor::getStateInformation (juce::MemoryBlock& dest)
         xml->addChildElement (inMapToTree().createXml().release());    // controllers, like ports, stay out of presets
         xml->setAttribute ("presetIndex", presets.getCurrent());
         xml->setAttribute ("uiScale", (double) uiScale.load());
+        xml->setAttribute ("cvFullScale", (double) engine.cvFullScale.load());     // like ports, these belong to the machine
+        xml->setAttribute ("cvZeroNote", engine.cvZeroNote.load());
         copyXmlToBinary (*xml, dest);
     }
 }
@@ -499,6 +564,8 @@ void SeggProcessor::setStateInformation (const void* data, int size)
             if (auto* map = xml->getChildByName ("INMAP")) inMapFromTree (juce::ValueTree::fromXml (*map));
             presets.markCurrent (xml->getIntAttribute ("presetIndex", 0));
             uiScale = (float) juce::jlimit (0.6, 2.0, xml->getDoubleAttribute ("uiScale", 1.0));
+            engine.cvFullScale = (float) juce::jlimit ((double) kCvMinFullScale, (double) kCvMaxFullScale, xml->getDoubleAttribute ("cvFullScale", kCvDefaultFullScale));
+            engine.cvZeroNote = juce::jlimit (0, 127, xml->getIntAttribute ("cvZeroNote", kCvDefaultZeroNote));
         }
     }
 }
@@ -717,6 +784,7 @@ void PresetManager::resetPatterns()
         }
     }
     for (auto& row : proc.engine.outMap) row.clear();
+    for (auto& row : proc.engine.cvMap) row.clear();
 }
 
 void PresetManager::load (int index)
