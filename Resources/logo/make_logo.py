@@ -92,11 +92,26 @@ def motif(uid, pal):
                  f'<rect x="{hx - 12.5}" y="{htop - 45}" width="25" height="50" rx="12.5" fill="{h}"/>'
                  f'<rect x="{hx - hw / 2 - 19}" y="{htop + 15}" width="{hw + 38}" height="46" rx="12" fill="{h}"/></g>')
     s.append(f'<g clip-path="url(#cr{uid})">')
-    s.append(f'<rect x="{hx - 3.5}" y="{htop - 26}" width="7" height="30" rx="3.5" fill="{H}"/>')
-    s.append(f'<circle cx="{hx}" cy="{htop - 28}" r="8.5" fill="{H}"/>')
-    for side in (-1, 1):
-        s.append(f'<rect x="{hx + side * (hw / 2 + 3) - 7:.1f}" y="{htop + 24}" width="14" height="28" rx="5" fill="{H}"/>')
-    s.append(f'<rect x="{hx - hw / 2}" y="{htop}" width="{hw}" height="{hh + 40}" rx="24" fill="{H}"/>')
+    # the head is a halftone: tiny dots at the antenna that grow and merge into the solid silhouette below
+    sil = (f'<rect x="{hx - 3.5}" y="{htop - 26}" width="7" height="30" rx="3.5"/>'
+           f'<circle cx="{hx}" cy="{htop - 28}" r="8.5"/>'
+           + "".join(f'<rect x="{hx + side * (hw / 2 + 3) - 7:.1f}" y="{htop + 24}" width="14" height="28" rx="5"/>' for side in (-1, 1))
+           + f'<rect x="{hx - hw / 2}" y="{htop}" width="{hw}" height="{hh + 40}" rx="24"/>')
+    s.append(f'<clipPath id="ch{uid}">{sil}</clipPath><g clip-path="url(#ch{uid})">')
+    P = 11.0
+    y_from, y_full = htop - 38, htop + 82
+    y = y_from
+    row = 0
+    while y < htop + hh + 40:
+        f = min(1.0, max(0.0, (y - y_from) / (y_full - y_from)))
+        rad = P * (0.15 + 0.45 * f ** 1.5)                       # 0.74 P overlaps the neighbours: solid
+        x = hx - hw / 2 - 20 + (P / 2 if row % 2 else 0)
+        while x < hx + hw / 2 + 20:
+            s.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{rad:.2f}" fill="{H}"/>')
+            x += P
+        y += P * 0.866
+        row += 1
+    s.append('</g>')
     s.append(f'<rect x="{hx - 34}" y="{htop + 24}" width="68" height="24" rx="12" fill="{V}"/>')
     s.append(f'<circle cx="{hx + 12}" cy="{htop + 36}" r="7" fill="{E}"/>')
     s.append('</g>')
@@ -132,7 +147,7 @@ def disc(uid, cx, cy, R, kind):
             p0 = (CX + rr * math.sin(a0), CY - rr * math.cos(a0))
             p1 = (CX + rr * math.sin(a1), CY - rr * math.cos(a1))
             s.append(f'<path d="M{p0[0]:.1f},{p0[1]:.1f} A{rr},{rr} 0 0 1 {p1[0]:.1f},{p1[1]:.1f}" fill="none" stroke="{col}" stroke-width="8.4"/>')
-        pal = dict(bar=WHITE, head=INK, visor=YOLK, accent=INK)
+        pal = dict(bar=WHITE, head=INK, visor=WHITE, accent=INK)
     else:
         s.append(f'<circle cx="{CX}" cy="{CY}" r="240" fill="{INK if kind == "ink" else WHITE}"/>')
         pal = dict(bar=WHITE if kind == "ink" else INK, head=WHITE if kind == "ink" else INK, accent=WHITE if kind == "ink" else INK, visor=INK if kind == "ink" else WHITE, halo=INK if kind == "ink" else WHITE)
