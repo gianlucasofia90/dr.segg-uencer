@@ -1,6 +1,6 @@
 # Changelog
 
-## [Non pubblicato]
+## [0.1.9] - 2026-11-04
 - Il controllo `NOTE` del deck è un menu a tendina diviso per ottave su tutte le pagine, non più solo in ROUTING: sostituisce la barra da trascinare in EUCLID, STEP, TURING, CARTESIAN, PHYSICS e MIDI MAP.
 
 ## [0.1.8] - 2026-11-04
