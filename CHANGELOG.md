@@ -1,5 +1,8 @@
 # Changelog
 
+## [Non pubblicato]
+- Il controllo `NOTE` del deck è un menu a tendina diviso per ottave su tutte le pagine, non più solo in ROUTING: sostituisce la barra da trascinare in EUCLID, STEP, TURING, CARTESIAN, PHYSICS e MIDI MAP.
+
 ## [0.1.8] - 2026-11-04
 - Nuovo logo nell'header: un disco rosso con un anello nero che sfuma al giallo in alto. Dentro, un uovo fatto di colonne da sequencer si apre lungo una crepa a zig-zag e ne fa capolino un robot a puntini con l'occhio bianco. Accanto, la scritta DR. SEGG-UENCER in Rubik Black Italic, senza più l'ombra rossa/verde.
 - I file del logo (icona, versioni mono, orizzontale, verticale, solo scritta; SVG e PNG) sono in `Resources/logo`, con lo script che li genera.

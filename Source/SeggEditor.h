@@ -332,7 +332,7 @@ private:
         add (pSwing, "Swing", K::Knob, 0);   add (pDrift, "Drift", K::Knob, 0);   add (pGate, "Gate", K::Knob, 0);
         add (pVel, "Velocity", K::Knob, 0);  add (pVrand, "Vel Rnd", K::Knob, 0); add (pProb, "Chance", K::Knob, 0);
         add (pRoll, "Roll", K::Knob, 0);     add (pMutate, "Mutate", K::Knob, 0);
-        add (pRate, "Rate", K::Menu, 0);     add (pNote, "Note", K::Box, 0);      add (pScale, "Scale", K::Menu, 0);
+        add (pRate, "Rate", K::Menu, 0);     add (pNote, "Note", K::Menu, 0);     add (pScale, "Scale", K::Menu, 0);
         add (pChord, "Chord", K::Menu, 0);   add (pRolln, "Roll Hits", K::Box, 0); add (pDelay, "Delay", K::Box, 0);
         add (pSeed, "Seed", K::Box, 0);
         add (pPort, "Output", K::Menu, 0);   add (pCh, "Channel", K::Box, 0);
@@ -355,13 +355,6 @@ private:
         add (pPrange, "Range", K::Knob, 1 + Physics);   add (pPmode, "Notes", K::Menu, 1 + Physics);
         add (pPquant, "QUANTIZE", K::Toggle, 1 + Physics);
 
-        // in ROUTING the deck picks the note from a menu
-        noteMenu = std::make_unique<Control> (proc.state, SeggProcessor::tid (track, pNote), "Note", K::Menu);
-        noteMenu->getProperties().set ("sgDark", true);
-        noteMenu->setCaptionColour (c::onPlate);
-        addChildComponent (noteMenu.get());
-        noteMenu->sendLookAndFeelChange();
-
         for (auto& e : trackControls) { e.control->sendLookAndFeelChange(); }
         layoutTrackControls();
         updateVisibility();
@@ -374,8 +367,7 @@ private:
         const int row1 = kDeckY + 20, row2 = kDeckY + 130, row3 = kDeckY + 22;
         const P knobs[8] = { pSwing, pDrift, pGate, pVel, pVrand, pProb, pRoll, pMutate };
         for (int i = 0; i < 8; ++i) place (knobs[i], 424 + i * 74, row1, 74, 100);
-        place (pRate, 424, row2, 92, 40);    place (pNote, 524, row2, 70, 38);   place (pScale, 602, row2, 108, 40);
-        if (noteMenu != nullptr) noteMenu->setBounds (524, row2, 70, 40);
+        place (pRate, 424, row2, 92, 40);    place (pNote, 524, row2, 70, 40);   place (pScale, 602, row2, 108, 40);
         place (pChord, 718, row2, 84, 40);   place (pRolln, 810, row2, 62, 38);  place (pDelay, 880, row2, 66, 38);
         place (pSeed, 954, row2, 62, 38);
         place (pPort, 1044, row3, 100, 40);  place (pCh, 1152, row3, 96, 38);
@@ -417,10 +409,9 @@ private:
         for (auto& e : trackControls)
         {
             const bool side = e.param == pPort || e.param == pCh || e.param == pLsrc || e.param == pLmode || e.param == pNotes;
-            const bool shown = e.group == 0 ? ! (route && side) && ! (routed && e.param == pNote) : ! route && e.group == type + 1;
+            const bool shown = e.group == 0 ? ! (route && side) : ! route && e.group == type + 1;
             if (e.control->isVisible() != shown) e.control->setVisible (shown);
         }
-        if (noteMenu != nullptr && noteMenu->isVisible() != routed) noteMenu->setVisible (routed);
         view.setVisible (! route);
         routing.setVisible (routed);
         mapPage.setVisible (mapped);
@@ -485,7 +476,7 @@ private:
     juce::OwnedArray<segg::Control> globals, owned;
     juce::HashMap<juce::String, segg::Control*> globalById;
     std::vector<Entry> trackControls;
-    std::unique_ptr<segg::Control> routeOffset, routeReset, routeKey, noteMenu;
+    std::unique_ptr<segg::Control> routeOffset, routeReset, routeKey;
     juce::TextButton prevBtn, nextBtn, saveBtn, delBtn, routingBtn, mapBtn, panicBtn;
     juce::ComboBox presetBox;
     int track = 0, slowTick = 0, lastType = -1, statusShown = -1;
@@ -531,6 +522,7 @@ public:
     void setWindowsHelp (bool on)     { ui.setWindowsHelp (on); }
     void setLaneForSnapshot (int l)   { ui.setLaneForSnapshot (l); }
     void tickForSnapshot()            { ui.tickForSnapshot(); }
+    segg::Control* trackControl (segg::P p) { return ui.getTrackControl (p); }
 
 private:
     SeggProcessor& proc;
