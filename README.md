@@ -39,7 +39,7 @@ Una traccia ne ascolta un'altra (`Link From`), con precisione al campione:
 - **Choke**: la sorgente la zittisce.
 
 ### Globali
-`Root` e `Scale`, `Density` (scala la Chance di tutte le tracce), `Chaos` (si somma a Mutate), Sync DAW o FREE. Nella pagina ROUTING: `Port Offset`, `Reset on Play`, `MIDI Transpose` (le note in ingresso traspongono tutto, riferimento C3 = MIDI 60). `PANIC` chiude tutte le note su tutte le uscite.
+`Root` e `Scale`, `Density` (scala la Chance di tutte le tracce), `Chaos` (si somma a Mutate), Sync DAW o FREE. Nella pagina ROUTING: `Port Offset`, `Reset on Play`, `MIDI Transpose` (le note in ingresso traspongono tutto, riferimento C3 = MIDI 60) e le uscite CV. `PANIC` chiude tutte le note su tutte le uscite.
 
 ## Uso in Ableton Live
 Limiti di Live da conoscere:
@@ -72,6 +72,35 @@ Se in ROUTING una porta è segnata `UNAVAILABLE`, la sta tenendo occupata un alt
 **3. Una sola destinazione, uscita Host.** Tutte le tracce su `Host`; su una seconda traccia MIDI, `MIDI From` = traccia di DR. SEGG-UENCER, sotto `DR. SEGG-UENCER`, `Monitor` = `In`. Va bene per un Drum Rack, dove contano le note e non i canali. Funziona con il VST3, non con l'AU.
 
 ![Pagina ROUTING con 16 porte](docs/screenshot-routing.png)
+
+In ROUTING il controllo `NOTE` del deck diventa un menu a tendina, con le 128 note divise per ottava. Sulle altre pagine resta la barra da trascinare.
+
+## Uscite CV
+La scheda `CV` di ROUTING manda i segnali delle tracce a 16 uscite CV. Sono uscite audio aggiuntive del plugin, a coppie stereo da `CV 1-2` a `CV 15-16`: la tensione arriva ai moduli solo con un'interfaccia **DC-coupled**, come la Expert Sleepers ES-8. Un'interfaccia normale blocca le tensioni lente, quindi pitch e gate non reggono.
+
+![Pagina ROUTING, scheda CV](docs/screenshot-cv.png)
+
+Ogni riga sceglie traccia e segnale:
+
+| Segnale | Valore |
+|---|---|
+| **Pitch** | la nota fondamentale della traccia, a 1 V/ottava; con un accordo, solo la fondamentale |
+| **Gate** | `Max` mentre la nota è tenuta, `Min` dopo; con gate sovrapposti resta alto |
+| **Trigger** | impulso di 5 ms su `Max` a ogni colpo, anche durante un gate tenuto |
+| **Velocity** | la velocity dell'ultimo colpo, tra `Min` e `Max` |
+| **Random** | un valore nuovo a ogni colpo, tra `Min` e `Max` |
+| **Position X** | come in MIDI MAP. Su Turing è il registro, come l'uscita CV del modulo |
+| **Position Y** | come in MIDI MAP |
+
+- `Min` e `Max` sono in volt, da -10 a +10. `Slew` ammorbidisce i salti, per esempio il glide del Pitch; Gate e Trigger non lo usano.
+- `FULL SCALE` è la tensione che l'interfaccia raggiunge a fondo scala digitale: 10 V sulla ES-8. Per accordare con precisione puoi correggerla al centesimo di volt.
+- `NOTE AT 0 V` è la nota che corrisponde a 0 V, C3 (MIDI 60) in partenza.
+- `NOTES` spento toglie solo il MIDI: la traccia continua a pilotare i suoi CV.
+- I CV sono precisi al campione e non dipendono dal buffer audio. Con lo stop i gate si chiudono e il Pitch resta sull'ultima nota.
+
+**In Ableton Live.** Crea una traccia audio per ogni coppia. In `Audio From` scegli la traccia di DR. SEGG-UENCER e poi la coppia, `Monitor` = `In`, in `Audio To` scegli le uscite dell'interfaccia. Lascia la traccia a 0 dB e senza effetti, perché il fader cambia le tensioni. Sono coppie stereo: conviene usarle come pitch e gate di una voce, sulle stesse due uscite dell'interfaccia.
+
+La tabella si salva con il progetto e nei preset, come MIDI MAP Output. `FULL SCALE` e `NOTE AT 0 V` dipendono dalla macchina: si salvano con il progetto, non nei preset. Una luce rossa accanto a un'uscita indica che l'host l'ha spenta.
 
 ## MIDI MAP
 La pagina MIDI MAP ha due tabelle da 16 righe.
@@ -162,6 +191,7 @@ I test controllano temporizzazione al campione, poliritmi, i cinque sequencer, l
 | `Source/DirectMidi.h` | porte MIDI dirette e virtuali |
 | `Source/PortMemory.h` | ultima configurazione delle porte sulla macchina |
 | `Source/MidiMap.h` | tabelle della MIDI MAP |
+| `Source/CvMap.h` | tabella delle uscite CV |
 | `Source/SeggProcessor.*` | parametri, trasporto, stato, preset |
 | `Source/Presets.h` | interfaccia dei preset; le ricette sono in `SeggProcessor.cpp` |
 | `Source/SeggUI.h`, `Source/SeggEditor.h` | grafica, viste dei sequencer, routing, layout |

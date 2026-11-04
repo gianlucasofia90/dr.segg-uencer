@@ -77,6 +77,8 @@ public:
     void assignPort (int slot, const juce::String& deviceId);
     /** Message thread. A new instance takes the last configuration; an instance restored from a session keeps its own. */
     void restoreLastPorts();
+    /** False when the host has switched off the audio output that carries this CV. */
+    bool isCvOutputOpen (int output) const;
 
     juce::AudioProcessorValueTreeState state;
     segg::PresetManager presets;
@@ -102,6 +104,9 @@ private:
     void inMapFromTree (const juce::ValueTree&);
     juce::ValueTree outMapToTree() const;
     void outMapFromTree (const juce::ValueTree&);
+    juce::ValueTree cvMapToTree() const;
+    void cvMapFromTree (const juce::ValueTree&);
+    static BusesProperties makeBuses();
     void timerCallback() override
     {
         pumpMidiMap();
