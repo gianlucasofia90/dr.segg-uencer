@@ -1,6 +1,6 @@
 # Changelog
 
-## [Non pubblicato]
+## [0.1.6] - 2026-11-04
 - **Uscite CV**: nuova scheda `CV` in ROUTING. 16 uscite, come uscite audio aggiuntive del plugin a coppie stereo, da usare con un'interfaccia DC-coupled. Ogni riga assegna a un'uscita Pitch (1 V/ottava), Gate, Trigger, Velocity, Random, Position X o Position Y di una traccia, con Min e Max in volt e Slew.
 - `FULL SCALE` e `NOTE AT 0 V` adattano le tensioni all'interfaccia. La tabella si salva anche nei preset, questi due valori solo con il progetto.
 - In ROUTING il controllo `NOTE` del deck è un menu a tendina, diviso per ottave.
