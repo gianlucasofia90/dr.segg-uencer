@@ -100,7 +100,8 @@ inline void hazard (juce::Graphics& g, juce::Rectangle<float> r, float band = 10
     }
 }
 
-/** Glass panel with its two-line title: kicker word, then the section word on a tagged plate. */
+/** Glass panel with its two-line title, set as plain type: a light, widely tracked kicker over the section word,
+    both flush left, then a hairline across the panel. No plate and no shadow behind the words. */
 inline void glassPanel (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& kicker, const juce::String& title)
 {
     juce::Path body;
@@ -111,16 +112,15 @@ inline void glassPanel (juce::Graphics& g, juce::Rectangle<float> r, const juce:
     g.setColour (c::glassEdge);
     g.strokePath (body, juce::PathStrokeType (1.0f));
 
+    const int x = (int) r.getX() + 16, w = (int) r.getWidth() - 32;
     g.setColour (c::inkSoft);
-    g.setFont (medium (10.0f, 0.3f));
-    g.drawText (kicker.toUpperCase(), (int) r.getX() + 16, (int) r.getY() + 8, 200, 12, juce::Justification::left);
-    const auto f = bold (13.0f, 0.22f);
-    const float tw = juce::GlyphArrangement::getStringWidth (f, title.toUpperCase()) + 36.0f;
-    auto tr = juce::Rectangle<float> (r.getX() + 18, r.getY() + 22, tw, 22);
-    taggedPlate (g, tr, c::plate);
-    g.setColour (c::onPlate);
-    g.setFont (f);
-    g.drawText (title.toUpperCase(), tr.reduced (14, 0), juce::Justification::centred);
+    g.setFont (medium (11.0f, 0.42f));
+    g.drawText (kicker.toUpperCase(), x, (int) r.getY() + 12, w, 13, juce::Justification::left);
+    g.setColour (c::ink);
+    g.setFont (bold (17.0f, 0.32f));
+    g.drawText (title.toUpperCase(), x, (int) r.getY() + 26, w, 20, juce::Justification::left);
+    g.setColour (c::ink.withAlpha (0.18f));
+    g.fillRect ((float) x, r.getY() + 48.0f, (float) w, 1.0f);
 }
 
 /** Controls on a dark ground (header plates, modulation deck) carry this property. */
