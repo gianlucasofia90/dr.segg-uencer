@@ -76,8 +76,9 @@ juce_add_plugin(DrSeggUencer
     AU_MAIN_TYPE kAudioUnitType_MusicDevice
     AAX_CATEGORY AAX_ePlugInCategory_SWGenerators)
 
-# Embedded UI fonts (Rubik, Silkscreen; SIL Open Font License, see Resources/fonts)
+# Embedded UI fonts (Rubik, Silkscreen; SIL Open Font License, see Resources/fonts) and the logo mark
 juce_add_binary_data(DrSeggUencerFonts HEADER_NAME SeggFonts.h NAMESPACE SeggFonts SOURCES
+    Resources/logo/drsegg-mark.svg
     Resources/fonts/Rubik-Medium.ttf
     Resources/fonts/Rubik-Bold.ttf
     Resources/fonts/Rubik-BlackItalic.ttf

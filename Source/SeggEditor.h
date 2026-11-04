@@ -170,11 +170,15 @@ public:
         g.setColour (c::groundAlt);
         g.fillRect (0.0f, 0.0f, W, (float) kHeaderH);
         hazard (g, { 0.0f, (float) kHeaderH - 6.0f, W, 6.0f });
-        g.setFont (black (34.0f, -0.01f));
-        const juce::String name ("DR. SEGG-UENCER");
-        g.setColour (c::go);      g.drawText (name, 22, 15, 340, 40, juce::Justification::centredLeft);
-        g.setColour (c::signal);  g.drawText (name, 19, 12, 340, 40, juce::Justification::centredLeft);
-        g.setColour (c::onPlate); g.drawText (name, 16, 9, 340, 40, juce::Justification::centredLeft);
+        // logo: egg-robot mark + live wordmark (Rubik Black Italic), no offset shadow, as in SONIC GRAIN
+        constexpr int markSize = 46;
+        const juce::Rectangle<float> markBox ((float) kMargin, (kHeaderH - 6 - markSize) * 0.5f, (float) markSize, (float) markSize);
+        if (logoMark != nullptr)
+            logoMark->drawWithin (g, markBox, juce::RectanglePlacement::centred, 1.0f);
+        g.setFont (black (30.0f, -0.01f));
+        const int wmX = kMargin + markSize + 12;
+        g.setColour (c::onPlate);
+        g.drawText ("DR. SEGG-UENCER", juce::Rectangle<int> (wmX, 0, 400 - wmX, kHeaderH - 6), juce::Justification::centredLeft);
         taggedPlate (g, { 410, 17, 236, 34 }, c::tag);
 
         // transport console: one black box, every label inside it, flush with the right margin
@@ -471,6 +475,7 @@ private:
     Layer backdrop;
 
     SeggProcessor& proc;
+    std::unique_ptr<juce::Drawable> logoMark { juce::Drawable::createFromImageData (SeggFonts::drseggmark_svg, SeggFonts::drseggmark_svgSize) };
     segg::LookAndFeel lnf;
     segg::TrackList list;
     segg::EngineView view;
