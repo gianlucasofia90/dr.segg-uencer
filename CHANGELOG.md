@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.8] - 2026-11-04
+- Nuovo logo nell'header: un disco rosso con un anello nero che sfuma al giallo in alto. Dentro, un uovo fatto di colonne da sequencer si apre lungo una crepa a zig-zag e ne fa capolino un robot a puntini con l'occhio bianco. Accanto, la scritta DR. SEGG-UENCER in Rubik Black Italic, senza più l'ombra rossa/verde.
+- I file del logo (icona, versioni mono, orizzontale, verticale, solo scritta; SVG e PNG) sono in `Resources/logo`, con lo script che li genera.
+
 ## [0.1.7] - 2026-11-04
 - Titoli delle sezioni solo testo, senza piastra né ombra: una riga piccola e spaziata sopra il nome della sezione, entrambe allineate a sinistra, poi una linea sottile su tutto il pannello.
 
