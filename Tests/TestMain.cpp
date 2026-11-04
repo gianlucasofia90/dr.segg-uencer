@@ -685,87 +685,88 @@ static void testDirectPorts()
 
 static void testPortMemory()
 {
+    // processors on the heap, like in Rig: they are too big for a Windows stack
     using Devices = juce::Array<juce::MidiDeviceInfo>;
     auto slots = [] (SeggProcessor& p) { PortIds ids; for (int i = 0; i < kNumSlots; ++i) ids[(size_t) i] = p.direct.getSlot (i); return ids; };
 
     PortMemory::file().deleteFile();
     {   // nothing configured yet
-        SeggProcessor p;
-        p.restoreLastPorts();
-        CHECK (slots (p) == PortIds {}, "with no memory a new instance has no ports");
+        auto p = std::make_unique<SeggProcessor>();
+        p->restoreLastPorts();
+        CHECK (slots (*p) == PortIds {}, "with no memory a new instance has no ports");
     }
 
     juce::MemoryBlock emptySession, wiredSession;
     {   // this build has no MIDI devices, so the ports show as unavailable, but the assignment is what is under test
-        SeggProcessor p;
-        p.restoreLastPorts();
-        p.getStateInformation (emptySession);
-        p.assignPort (0, "device-a");
-        p.assignPort (3, DirectMidi::virtualId());
-        p.assignPort (15, "device-b");
-        p.assignPort (15, {});
-        p.assignPort (7, "device-c");
-        p.getStateInformation (wiredSession);
+        auto p = std::make_unique<SeggProcessor>();
+        p->restoreLastPorts();
+        p->getStateInformation (emptySession);
+        p->assignPort (0, "device-a");
+        p->assignPort (3, DirectMidi::virtualId());
+        p->assignPort (15, "device-b");
+        p->assignPort (15, {});
+        p->assignPort (7, "device-c");
+        p->getStateInformation (wiredSession);
     }
     CHECK (PortMemory::file().existsAsFile(), "a choice in ROUTING is written to disk");
     {
-        SeggProcessor p;
-        CHECK (slots (p) == PortIds {}, "no port opens while the host may still restore a session");
-        p.restoreLastPorts();
-        CHECK (p.direct.getSlot (0) == "device-a" && p.direct.getSlot (3) == DirectMidi::virtualId() && p.direct.getSlot (7) == "device-c",
+        auto p = std::make_unique<SeggProcessor>();
+        CHECK (slots (*p) == PortIds {}, "no port opens while the host may still restore a session");
+        p->restoreLastPorts();
+        CHECK (p->direct.getSlot (0) == "device-a" && p->direct.getSlot (3) == DirectMidi::virtualId() && p->direct.getSlot (7) == "device-c",
                "a new instance starts from the last configuration");
-        CHECK (p.direct.getSlot (15).isEmpty(), "the last change counts, also when it clears a port");
-        CHECK (p.direct.isSlotFailed (0) && ! p.direct.isSlotLive (0), "a device that is not there stays unavailable");
-        CHECK (p.direct.getSlot (1).isEmpty(), "a port never assigned stays free");
+        CHECK (p->direct.getSlot (15).isEmpty(), "the last change counts, also when it clears a port");
+        CHECK (p->direct.isSlotFailed (0) && ! p->direct.isSlotLive (0), "a device that is not there stays unavailable");
+        CHECK (p->direct.getSlot (1).isEmpty(), "a port never assigned stays free");
     }
     {   // a session, even one with no ports at all, is left as it was saved
-        SeggProcessor p;
-        p.setStateInformation (emptySession.getData(), (int) emptySession.getSize());
-        p.restoreLastPorts();
-        CHECK (slots (p) == PortIds {}, "a session saved with no ports stays with no ports");
+        auto p = std::make_unique<SeggProcessor>();
+        p->setStateInformation (emptySession.getData(), (int) emptySession.getSize());
+        p->restoreLastPorts();
+        CHECK (slots (*p) == PortIds {}, "a session saved with no ports stays with no ports");
     }
     {
-        SeggProcessor p;
-        p.getStateInformation (emptySession);       // host asks for state before anything is settled
-        p.setStateInformation (emptySession.getData(), (int) emptySession.getSize());
-        p.restoreLastPorts();
-        CHECK (p.direct.getSlot (0) == "device-a", "a state taken before the first play still counts as new");
+        auto p = std::make_unique<SeggProcessor>();
+        p->getStateInformation (emptySession);       // host asks for state before anything is settled
+        p->setStateInformation (emptySession.getData(), (int) emptySession.getSize());
+        p->restoreLastPorts();
+        CHECK (p->direct.getSlot (0) == "device-a", "a state taken before the first play still counts as new");
     }
     {   // the session arrives after the host has already started the plugin
-        SeggProcessor p;
-        p.restoreLastPorts();
-        p.setStateInformation (emptySession.getData(), (int) emptySession.getSize());
-        p.setStateInformation (wiredSession.getData(), (int) wiredSession.getSize());
-        CHECK (p.direct.getSlot (7) == "device-c", "a late session replaces the memory");
+        auto p = std::make_unique<SeggProcessor>();
+        p->restoreLastPorts();
+        p->setStateInformation (emptySession.getData(), (int) emptySession.getSize());
+        p->setStateInformation (wiredSession.getData(), (int) wiredSession.getSize());
+        CHECK (p->direct.getSlot (7) == "device-c", "a late session replaces the memory");
     }
     {   // opening an old project is not a configuration: the memory does not move
-        SeggProcessor s;
-        s.restoreLastPorts();
-        s.assignPort (2, "device-z");
+        auto s = std::make_unique<SeggProcessor>();
+        s->restoreLastPorts();
+        s->assignPort (2, "device-z");
         juce::MemoryBlock other;
-        s.getStateInformation (other);
-        s.assignPort (2, "device-y");
-        SeggProcessor reopened;
-        reopened.setStateInformation (other.getData(), (int) other.getSize());
-        SeggProcessor fresh;
-        fresh.restoreLastPorts();
-        CHECK (fresh.direct.getSlot (2) == "device-y", "restoring a session leaves the memory alone");
+        s->getStateInformation (other);
+        s->assignPort (2, "device-y");
+        auto reopened = std::make_unique<SeggProcessor>();
+        reopened->setStateInformation (other.getData(), (int) other.getSize());
+        auto fresh = std::make_unique<SeggProcessor>();
+        fresh->restoreLastPorts();
+        CHECK (fresh->direct.getSlot (2) == "device-y", "restoring a session leaves the memory alone");
     }
     {   // presets carry no ports, and loading one does not touch them
-        SeggProcessor p;
-        p.restoreLastPorts();
-        p.presets.load (1);
-        CHECK (p.direct.getSlot (0) == "device-a", "a preset leaves the ports alone");
+        auto p = std::make_unique<SeggProcessor>();
+        p->restoreLastPorts();
+        p->presets.load (1);
+        CHECK (p->direct.getSlot (0) == "device-a", "a preset leaves the ports alone");
     }
 
     {   // the path a host really takes: the plugin's own timer, once the host has started it
-        SeggProcessor p;
+        auto p = std::make_unique<SeggProcessor>();
         juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
-        CHECK (p.direct.getSlot (0).isEmpty(), "before the first play the timer opens nothing");
-        p.prepareToPlay (48000.0, 512);
-        for (int wait = 0; wait < 150 && p.direct.getSlot (0).isEmpty(); ++wait)     // shared CI machines can be slow
+        CHECK (p->direct.getSlot (0).isEmpty(), "before the first play the timer opens nothing");
+        p->prepareToPlay (48000.0, 512);
+        for (int wait = 0; wait < 150 && p->direct.getSlot (0).isEmpty(); ++wait)     // shared CI machines can be slow
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-        CHECK (p.direct.getSlot (0) == "device-a", "after the first play the timer brings the ports back");
+        CHECK (p->direct.getSlot (0) == "device-a", "after the first play the timer brings the ports back");
     }
     {   // the first time on a machine the folder does not exist yet
         const auto real = PortMemory::fileOverride();
