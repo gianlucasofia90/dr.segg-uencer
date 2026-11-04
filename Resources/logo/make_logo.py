@@ -52,8 +52,12 @@ def motif(uid, pal):
     x0, x1 = min(xs), max(xs)
     pitch = (x1 - x0) / N_BARS
     w = pitch * 0.66
+    ca, sa = math.cos(math.radians(TILT)), math.sin(math.radians(TILT))
+    rot = [(CX + (x - CX) * ca - (y - CY) * sa, CY + (x - CX) * sa + (y - CY) * ca) for x, y in eg]
+    dx = CX - (min(p[0] for p in rot) + max(p[0] for p in rot)) / 2
+    dy = CY - (min(p[1] for p in rot) + max(p[1] for p in rot)) / 2
     s = [f'<clipPath id="ce{uid}"><path d="{poly(eg)}"/></clipPath>',
-         f'<g transform="rotate({TILT} {CX} {CY})"><g clip-path="url(#ce{uid})">']
+         f'<g transform="translate({dx:.2f} {dy:.2f}) rotate({TILT} {CX} {CY})"><g clip-path="url(#ce{uid})">']
     for i in range(N_BARS):
         cx = x0 + pitch * (i + 0.5)
         span = egg_span(cx, eg)
@@ -86,7 +90,9 @@ def disc(uid, cx, cy, R, kind):
         for i in range(n):
             a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1.4) / n
             t = (1 - math.cos(2 * math.pi * (i + 0.5) / n)) / 2          # 0 top, 1 bottom
-            col = lerp(YOLK, "#d27a0c", t / 0.45) if t < 0.45 else lerp("#d27a0c", INK, (t - 0.45) / 0.55)   # through amber, not olive
+            # bottom half solid black; the top half fades from black at the sides to yellow at the top (through amber, not olive)
+            u = min(1.0, t / 0.5)
+            col = INK if u >= 1 else (lerp(YOLK, "#d27a0c", u / 0.5) if u < 0.5 else lerp("#d27a0c", INK, (u - 0.5) / 0.5))
             p0 = (CX + rr * math.sin(a0), CY - rr * math.cos(a0))
             p1 = (CX + rr * math.sin(a1), CY - rr * math.cos(a1))
             s.append(f'<path d="M{p0[0]:.1f},{p0[1]:.1f} A{rr},{rr} 0 0 1 {p1[0]:.1f},{p1[1]:.1f}" fill="none" stroke="{col}" stroke-width="8.4"/>')
