@@ -34,40 +34,61 @@ def poly(pts, close=True):
     d = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts)
     return d + ("Z" if close else "")
 
-# crack: a zigzag of triangular teeth across the egg, the classic broken shell
-TEETH = 5
-def crack(cy=CY + 10, x0=CX - 110, x1=CX + 110, h=30.0):
-    w = (x1 - x0) / (2 * TEETH)
-    return [(x0 + i * w, cy - (h if i % 2 else 0)) for i in range(2 * TEETH + 1)]
+# ---------- the character: a lab egg-robot ----------
+# one riveted porthole eye, a zigzag crack for a mouth, an antenna, a bolt on each side
+def mouth_pts(cx=CX + 4, cy=CY + 62, half=70.0, teeth=4, h=20.0, gap=34.0):
+    """zigzag slit: the top edge is the crack, the bottom edge follows it, pinched at both ends"""
+    n = 2 * teeth
+    top, bot = [], []
+    for i in range(n + 1):
+        u = i / n
+        x = cx - half + 2 * half * u
+        y = cy - (h if i % 2 else 0) + h / 2
+        open_ = gap * math.sin(math.pi * u) ** 0.6
+        top.append((x, y - open_ / 2)); bot.append((x, y + open_ / 2))
+    return top + bot[::-1]
 
-def motif(uid, scale, shell_top, shell_bot, shade, yolk, dot_on, dot_off, edge):
-    """returns svg elements in the 512 box; caller wraps them in a transform"""
+def motif(uid, pal):
+    """pal: body, shade, line, glass, pupil, mouth, shine, dot_on, dot_off"""
     eg = egg_pts()
-    cr = crack()
-    top_clip = poly([(CX - 200, CY - 220)] + [(cr[0][0] - 80, cr[0][1])] + cr + [(cr[-1][0] + 80, cr[-1][1]), (CX + 200, CY - 220)])
-    bot_clip = poly([(CX - 200, CY + 220)] + [(cr[0][0] - 80, cr[0][1])] + cr + [(cr[-1][0] + 80, cr[-1][1]), (CX + 200, CY + 220)])
-    yolk_pts = egg_pts(a=88, b=120, cy=CY + 6)
     s = []
-    s.append(f'<clipPath id="ct{uid}"><path d="{top_clip}"/></clipPath>')
-    s.append(f'<clipPath id="cb{uid}"><path d="{bot_clip}"/></clipPath>')
-    if shade:
+    if pal["shade"]:
         s.append(f'<defs><linearGradient id="sh{uid}" x1="0" y1="0" x2="1" y2="1">'
                  f'<stop offset="0" stop-color="#fff"/><stop offset="0.55" stop-color="#fff"/><stop offset="1" stop-color="{CHROME}"/></linearGradient></defs>')
-    fill = f"url(#sh{uid})" if shade else shell_bot
-    # 16 steps around the egg, Euclidean 5 of 16
+    body = f"url(#sh{uid})" if pal["shade"] else pal["body"]
+    # 16 steps around the character, Euclidean 5 of 16
     on = {round(i * 16 / 5) for i in range(5)}
     for i in range(16):
         ang = math.radians(-90 + i * 22.5)
         x, y = CX + 178 * math.cos(ang), CY + 178 * math.sin(ang)
-        c, r = (dot_on, 8.0) if i in on else (dot_off, 5.0)
+        c, r = (pal["dot_on"], 8.0) if i in on else (pal["dot_off"], 5.0)
         s.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r}" fill="{c}"/>')
+    L = pal["line"]
     s.append(f'<g transform="rotate(-14 {CX} {CY})">')
-    if yolk:
-        s.append(f'<path d="{poly(yolk_pts)}" fill="{yolk}"/>')
-    s.append(f'<path d="{poly(eg)}" fill="{fill}" clip-path="url(#cb{uid})"/>')
-    # top shell lifted and tipped back: the sequence hatches
-    s.append(f'<g transform="translate(0 -22)">'
-             f'<path d="{poly(eg)}" fill="{fill if shade else shell_top}" clip-path="url(#ct{uid})"/></g>')
+    top = CY + 6 - 124
+    # antenna
+    s.append(f'<rect x="{CX - 3.5}" y="{top - 34}" width="7" height="40" rx="3.5" fill="{pal["body"] if not pal["shade"] else WHITE}"/>')
+    s.append(f'<circle cx="{CX}" cy="{top - 38}" r="11" fill="{pal["body"] if not pal["shade"] else WHITE}"/>')
+    s.append(f'<circle cx="{CX}" cy="{top - 38}" r="4.5" fill="{pal["pupil"]}"/>')
+    # side bolts
+    for side in (-1, 1):
+        x = CX + side * 94
+        s.append(f'<rect x="{x - 17:.1f}" y="{CY - 8}" width="34" height="38" rx="6" fill="{pal["body"] if not pal["shade"] else WHITE}"/>')
+        s.append(f'<rect x="{x - 17 + (21 if side > 0 else 3):.1f}" y="{CY + 1}" width="10" height="22" rx="3" fill="{L}"/>')
+    # body
+    s.append(f'<path d="{poly(eg)}" fill="{body}"/>')
+    # porthole eye
+    ex, ey = CX + 2, CY - 26
+    s.append(f'<circle cx="{ex}" cy="{ey}" r="52" fill="{L}"/>')
+    s.append(f'<circle cx="{ex}" cy="{ey}" r="44" fill="{pal["rim"]}"/>')
+    for i in range(8):
+        a = math.radians(22.5 + i * 45)
+        s.append(f'<circle cx="{ex + 38 * math.cos(a):.1f}" cy="{ey + 38 * math.sin(a):.1f}" r="3.6" fill="{L}"/>')
+    s.append(f'<circle cx="{ex}" cy="{ey}" r="31" fill="{pal["glass"]}"/>')
+    s.append(f'<circle cx="{ex + 7}" cy="{ey + 2}" r="13" fill="{pal["pupil"]}"/>')
+    s.append(f'<circle cx="{ex - 12}" cy="{ey - 13}" r="5.5" fill="{pal["shine"]}"/>')
+    # mouth: the crack
+    s.append(f'<path d="{poly(mouth_pts())}" fill="{pal["mouth"]}" stroke="{L}" stroke-width="5" stroke-linejoin="round"/>')
     s.append('</g>')
     return s
 
@@ -101,11 +122,12 @@ def disc(uid, cx, cy, R, kind):
     if kind == "colour":   # thin dark lip on both edges of the tape
         hz.append(f'<circle cx="{CX}" cy="{CY}" r="{R_IN}" fill="none" stroke="{DEEP}" stroke-opacity="0.5" stroke-width="2"/>')
     if kind == "colour":
-        m = motif(uid, k, WHITE, WHITE, True, YOLK, WHITE, "#ffffff55", INK)
+        pal = dict(body=WHITE, shade=True, line=INK, rim=CHROME, glass=INK, pupil=YOLK, mouth=YOLK, shine=WHITE, dot_on=WHITE, dot_off="#ffffff55")
     elif kind == "ink":
-        m = motif(uid, k, WHITE, WHITE, False, None, WHITE, "#ffffff55", None)
+        pal = dict(body=WHITE, shade=False, line=INK, rim=WHITE, glass=INK, pupil=WHITE, mouth=INK, shine=INK, dot_on=WHITE, dot_off="#ffffff55")
     else:
-        m = motif(uid, k, INK, INK, False, None, INK, "#17191d55", None)
+        pal = dict(body=INK, shade=False, line=WHITE, rim=INK, glass=WHITE, pupil=INK, mouth=WHITE, shine=WHITE, dot_on=INK, dot_off="#17191d55")
+    m = motif(uid, pal)
     s.append(f'<g transform="translate({cx - CX * k:.2f} {cy - CY * k:.2f}) scale({k:.5f})">')
     s += hz
     s.append(f'<g clip-path="url(#ci{uid})">')
