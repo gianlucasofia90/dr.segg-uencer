@@ -140,7 +140,7 @@ Con Sync su DAW il sequencer parte con il trasporto di Live. Con FREE usa il suo
 
 ## Download
 Ogni tag `v*` pubblica una Release con:
-- macOS: installer `.pkg` con VST3 e AU, oppure VST3, AU e AAX non firmato in zip (universal arm64 + x86_64, da macOS 11);
+- macOS: installer `.pkg` con VST3 e AU, oppure VST3, AU e AAX non firmato in zip (universal arm64 + x86_64, da macOS 10.13 High Sierra);
 - Windows: VST3;
 - Linux: VST3.
 
