@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.1.10] - 2026-11-06
+- macOS: il plugin ora funziona anche sui Mac Intel con macOS 10.13 High Sierra o successivo, compreso Catalina. Prima richiedeva macOS 11: in Ableton Live il VST3 non compariva e l'AU compariva ma non si apriva. Sui Mac Apple Silicon non cambia nulla.
+
 ## [0.1.9] - 2026-11-04
 - Il controllo `NOTE` del deck è un menu a tendina diviso per ottave su tutte le pagine, non più solo in ROUTING: sostituisce la barra da trascinare in EUCLID, STEP, TURING, CARTESIAN, PHYSICS e MIDI MAP.
 
